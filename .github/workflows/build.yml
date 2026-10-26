@@ -17,13 +17,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install platform + build-tools
+      - name: Prepare SDK
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/*$::')
+          PLATDIR=$(ls -d "$ANDROID_HOME"/platforms/android-*/ 2>/dev/null | sort -V | tail -1 | sed 's:/*$::')
+          echo "BT=$BT" >> $GITHUB_ENV
+          echo "PLATDIR=$PLATDIR" >> $GITHUB_ENV
+          echo "build-tools=$BT"
+          echo "platform=$PLATDIR"
+          "$BT/aapt2" version
+          test -f "$PLATDIR/android.jar"
 
       - name: Compile APK
         run: |
@@ -33,8 +38,7 @@ jobs:
           if [ -f index.html ]; then mv -f index.html assets/index.html; fi
           if [ -f ic_launcher.xml ]; then mv -f ic_launcher.xml res/drawable/ic_launcher.xml; fi
 
-          BT="$ANDROID_HOME/build-tools/34.0.0"
-          PLAT="$ANDROID_HOME/platforms/android-34/android.jar"
+          PLAT="$PLATDIR/android.jar"
           rm -rf out && mkdir -p out/classes out/gen
 
           "$BT/aapt2" compile --dir res -o out/res.zip
