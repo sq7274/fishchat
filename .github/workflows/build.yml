@@ -1,0 +1,81 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform + build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Compile APK
+        run: |
+          set -euo pipefail
+
+          mkdir -p assets res/drawable
+          if [ -f index.html ]; then mv -f index.html assets/index.html; fi
+          if [ -f ic_launcher.xml ]; then mv -f ic_launcher.xml res/drawable/ic_launcher.xml; fi
+
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          PLAT="$ANDROID_HOME/platforms/android-34/android.jar"
+          rm -rf out && mkdir -p out/classes out/gen
+
+          "$BT/aapt2" compile --dir res -o out/res.zip
+
+          "$BT/aapt2" link \
+            -o out/base.apk \
+            -I "$PLAT" \
+            --manifest AndroidManifest.xml \
+            -A assets \
+            --java out/gen \
+            --min-sdk-version 24 \
+            --target-sdk-version 34 \
+            --version-code 1 \
+            --version-name "1.0" \
+            out/res.zip
+
+          find out/gen -name '*.java' > out/srcs.txt
+          echo "MainActivity.java" >> out/srcs.txt
+          javac -encoding UTF-8 -nowarn -source 17 -target 17 -cp "$PLAT" -d out/classes @"out/srcs.txt"
+
+          mkdir -p out/dex
+          find out/classes -name '*.class' > out/classes.txt
+          "$BT/d8" --lib "$PLAT" --release --min-api 24 --output out/dex @"out/classes.txt"
+
+          cp out/base.apk out/app-unsigned.apk
+          (cd out/dex && zip -q -j ../app-unsigned.apk classes.dex)
+
+          "$BT/zipalign" -f 4 out/app-unsigned.apk out/app-aligned.apk
+
+          keytool -genkeypair -keystore out/debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" > /dev/null 2>&1
+
+          "$BT/apksigner" sign \
+            --ks out/debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --out dafeiyu.apk out/app-aligned.apk
+
+          ls -lh dafeiyu.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dafeiyu-apk
+          path: dafeiyu.apk
