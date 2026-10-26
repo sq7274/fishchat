@@ -117,7 +117,7 @@
 
   var DEF = {
     url: 'http://127.0.0.1:6185/api/v1/chat',
-    key: 'abk_l5wHg8-4nYxV8YFuArnliUaJfDs7D1PJIfRvWcD-lxg',
+    key: 'abk_u2QiHqqOB5YBu2htdW_eSDMXG90CBWADeo4wLZ7hFkI',
     user: 'youzhan',
     session: 'fish_app'
   };
@@ -214,18 +214,31 @@
     var st = pending[id];
     if (!st) return;
     if (!line) return;
-    log('<' + line.slice(0, 300));
 
     if (line.indexOf('data:') !== 0) return;
     var raw = line.slice(5).trim();
     if (!raw || raw === '[DONE]') return;
 
-    var txt = '';
-    try {
-      txt = pick(JSON.parse(raw));
-    } catch (e) {
-      txt = raw;
+    var o;
+    try { o = JSON.parse(raw); } catch (e) { return; }
+    if (!o || typeof o !== 'object') return;
+
+    /* 思考过程不算正文，丢掉 */
+    if (o.chain_type === 'reasoning') {
+      setDot('', '想事情');
+      return;
     }
+
+    if (o.type === 'error' || o.type === 'err') {
+      st.bub.className = 'bub err';
+      st.bub.textContent = '出错了：' + String(o.data || o.message || raw).slice(0, 300);
+      return;
+    }
+
+    var txt = '';
+    if (typeof o.data === 'string') txt = o.data;
+    else if (o.data && typeof o.data === 'object') txt = pick(o.data);
+    if (!txt) txt = pick(o);
     if (!txt) return;
 
     /* 累加式 vs 全量式，俩都兜住 */
