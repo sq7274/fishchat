@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>大肥鱼</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b1116;color:#e6edf3;
+    font:15px/1.6 -apple-system,system-ui,"PingFang SC","Noto Sans SC",sans-serif;
+    overscroll-behavior:none}
+  #app{display:flex;flex-direction:column;height:100%}
+
+  header{flex:0 0 auto;display:flex;align-items:center;gap:9px;
+    padding:calc(env(safe-area-inset-top) + 11px) 15px 11px;
+    border-bottom:1px solid #17222c}
+  #dot{width:7px;height:7px;border-radius:50%;background:#2c3a47;flex:0 0 auto}
+  #dot.on{background:#4ec9b0}
+  #dot.err{background:#c9737a}
+  header .t{font-size:14px;font-weight:600;letter-spacing:.01em}
+  header .s{font-size:11px;color:#5a6a78}
+  header .sp{flex:1}
+  header button{background:none;border:none;color:#7d8b99;font-size:13px;padding:6px 2px 6px 10px}
+
+  #msgs{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:16px 14px 8px;display:flex;flex-direction:column;gap:12px}
+  .row{display:flex}
+  .row.me{justify-content:flex-end}
+  .bub{max-width:84%;padding:9px 13px;border-radius:15px;
+    white-space:pre-wrap;word-break:break-word;font-size:15px}
+  .row.me .bub{background:#1c3748;color:#e2f2ff;border-bottom-right-radius:5px}
+  .row.ai .bub{background:#151e26;color:#dbe4ec;border-bottom-left-radius:5px}
+  .row.ai .bub:empty::after{content:"…";color:#4a5a68}
+  .err{color:#c9737a}
+  .empty{margin:auto;text-align:center;color:#4a5a68;font-size:13px;line-height:2}
+
+  footer{flex:0 0 auto;display:flex;gap:9px;align-items:flex-end;
+    padding:9px 12px calc(env(safe-area-inset-bottom) + 9px);
+    border-top:1px solid #17222c;background:#0b1116}
+  #inp{flex:1;background:#131c24;border:1px solid #1e2b36;border-radius:19px;
+    color:#e6edf3;padding:10px 15px;font:15px/1.5 inherit;resize:none;outline:none;
+    max-height:132px;overflow-y:auto;min-height:41px}
+  #inp:focus{border-color:#2a4557}
+  #inp::placeholder{color:#4a5a68}
+  #send{background:#1c3748;border:none;color:#8fd8f5;border-radius:19px;
+    padding:10px 17px;font:15px inherit;flex:0 0 auto}
+  #send:disabled{opacity:.35}
+
+  #panel{position:fixed;inset:0;background:#080d11;display:none;flex-direction:column;
+    padding:calc(env(safe-area-inset-top) + 18px) 18px calc(env(safe-area-inset-bottom) + 18px);z-index:9}
+  #panel.show{display:flex}
+  #panel h2{font-size:14px;margin:0 0 18px;font-weight:600;color:#b8c4d0}
+  .f{margin-bottom:14px}
+  .f label{display:block;font-size:11px;color:#5a6a78;margin-bottom:6px;letter-spacing:.04em}
+  .f input{width:100%;background:#131c24;border:1px solid #1e2b36;border-radius:9px;
+    color:#e6edf3;padding:10px 12px;font:12px/1.4 ui-monospace,SFMono-Regular,monospace;outline:none}
+  .f input:focus{border-color:#2a4557}
+  .f .h{font-size:11px;color:#4a5a68;margin-top:5px}
+  #log{font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:#6b7a88;
+    white-space:pre-wrap;word-break:break-all;background:#0d1419;border:1px solid #17222c;
+    border-radius:9px;padding:10px;max-height:40vh;overflow:auto;margin-bottom:14px;display:none}
+  #log.show{display:block}
+  #panel .btns{display:flex;gap:10px;margin-top:auto}
+  #panel .btns button{flex:1;padding:12px;border-radius:11px;border:none;font:14px inherit}
+  #ok{background:#1c3748;color:#9fe0ff}
+  #close{background:#161e26;color:#8b98a6}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span id="dot"></span>
+    <span class="t">大肥鱼</span>
+    <span class="s" id="stat">未连接</span>
+    <span class="sp"></span>
+    <button id="btnSet">设置</button>
+  </header>
+  <div id="msgs"><div class="empty">还没说话</div></div>
+  <footer>
+    <textarea id="inp" rows="1" placeholder="说点什么"></textarea>
+    <button id="send" disabled>发</button>
+  </footer>
+</div>
+
+<div id="panel">
+  <h2>连接设置</h2>
+  <div class="f">
+    <label>接口地址</label>
+    <input id="cUrl" spellcheck="false">
+    <div class="h">AstrBot 在手机本地，一般不用改</div>
+  </div>
+  <div class="f">
+    <label>API KEY</label>
+    <input id="cKey" spellcheck="false">
+    <div class="h">WebUI → 系统设置 → OpenAPI 里建的，abk_ 开头</div>
+  </div>
+  <div class="f">
+    <label>用户名</label>
+    <input id="cUser" spellcheck="false">
+    <div class="h">不能填管理员 ID，否则会被拒</div>
+  </div>
+  <div class="f">
+    <label>会话 ID</label>
+    <input id="cSess" spellcheck="false">
+    <div class="h">换个值就是开一段新对话</div>
+  </div>
+  <div id="log"></div>
+  <div class="btns">
+    <button id="close">关掉</button>
+    <button id="ok">保存</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var DEF = {
+    url: 'http://127.0.0.1:6185/api/v1/chat',
+    key: 'abk_l5wHg8-4nYxV8YFuArnliUaJfDs7D1PJIfRvWcD-lxg',
+    user: 'youzhan',
+    session: 'fish_app'
+  };
+
+  var cfg = load();
+  var msgs = document.getElementById('msgs');
+  var inp = document.getElementById('inp');
+  var sendBtn = document.getElementById('send');
+  var dot = document.getElementById('dot');
+  var stat = document.getElementById('stat');
+  var logBox = document.getElementById('log');
+  var seq = 0;
+  var pending = {};
+  var logs = [];
+
+  function load() {
+    try {
+      var raw = localStorage.getItem('fish_cfg');
+      if (raw) return Object.assign({}, DEF, JSON.parse(raw));
+    } catch (e) {}
+    return Object.assign({}, DEF);
+  }
+
+  function save() {
+    try { localStorage.setItem('fish_cfg', JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  function setDot(cls, txt) {
+    dot.className = cls;
+    stat.textContent = txt;
+  }
+
+  function log(s) {
+    logs.push(s);
+    if (logs.length > 140) logs.shift();
+    logBox.textContent = logs.join('\n');
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function clearEmpty() {
+    var e = msgs.querySelector('.empty');
+    if (e) e.remove();
+  }
+
+  function atBottom() {
+    return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 90;
+  }
+
+  function scroll() {
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function addRow(who, text) {
+    clearEmpty();
+    var row = document.createElement('div');
+    row.className = 'row ' + who;
+    var bub = document.createElement('div');
+    bub.className = 'bub';
+    bub.textContent = text || '';
+    row.appendChild(bub);
+    msgs.appendChild(row);
+    scroll();
+    return bub;
+  }
+
+  /* 从任意形状的 JSON 里抠出文本 */
+  function pick(o, d) {
+    d = d || 0;
+    if (d > 4 || o == null) return '';
+    if (typeof o === 'string') return o;
+    if (typeof o !== 'object') return '';
+    var keys1 = ['text', 'content', 'delta', 'message', 'msg', 'chunk'];
+    var i, v, r;
+    for (i = 0; i < keys1.length; i++) {
+      v = o[keys1[i]];
+      if (typeof v === 'string' && v) return v;
+      if (v && typeof v === 'object') {
+        r = pick(v, d + 1);
+        if (r) return r;
+      }
+    }
+    var keys2 = ['data', 'result', 'parts', 'content'];
+    for (i = 0; i < keys2.length; i++) {
+      v = o[keys2[i]];
+      if (v && typeof v === 'object') {
+        r = pick(v, d + 1);
+        if (r) return r;
+      }
+    }
+    return '';
+  }
+
+  window.__chunk = function (id, line) {
+    var st = pending[id];
+    if (!st) return;
+    if (!line) return;
+    log('<' + line.slice(0, 300));
+
+    if (line.indexOf('data:') !== 0) return;
+    var raw = line.slice(5).trim();
+    if (!raw || raw === '[DONE]') return;
+
+    var txt = '';
+    try {
+      txt = pick(JSON.parse(raw));
+    } catch (e) {
+      txt = raw;
+    }
+    if (!txt) return;
+
+    /* 累加式 vs 全量式，俩都兜住 */
+    if (txt.indexOf(st.text) === 0) st.text = txt;
+    else st.text += txt;
+
+    if (!st.mounted) { st.mounted = true; }
+    st.bub.textContent = st.text;
+    if (atBottom()) scroll();
+  };
+
+  window.__done = function (id, code, err) {
+    var st = pending[id];
+    if (!st) return;
+    delete pending[id];
+    log('> status ' + code + (err ? ' ' + String(err).slice(0, 400) : ''));
+    if (code === 200) {
+      setDot('on', '在线');
+      if (!st.text) st.bub.textContent = '（没说话）';
+    } else if (code === 0) {
+      setDot('err', '连不上');
+      st.bub.className = 'bub err';
+      st.bub.textContent = '连不上 AstrBot。看看它还在不在跑，地址对不对。';
+    } else {
+      setDot('err', 'HTTP ' + code);
+      st.bub.className = 'bub err';
+      st.bub.textContent = '出错了（' + code + '）\n' + String(err).slice(0, 400);
+    }
+    sendBtn.disabled = false;
+    if (atBottom()) scroll();
+  };
+
+  function native(fn, args) {
+    if (window.AndroidApp && typeof window.AndroidApp[fn] === 'function') {
+      window.AndroidApp[fn].apply(window.AndroidApp, args);
+      return true;
+    }
+    log('!! 没有 AndroidApp 桥，可能在浏览器里打开的');
+    return false;
+  }
+
+  function send() {
+    var text = inp.value.trim();
+    if (!text) return;
+    if (!window.AndroidApp) {
+      addRow('me', text);
+      var b = addRow('ai', '');
+      b.className = 'bub err';
+      b.textContent = '这不是在 APP 里打开的，没有原生通道。';
+      return;
+    }
+
+    addRow('me', text);
+    inp.value = '';
+    inp.style.height = 'auto';
+    sendBtn.disabled = true;
+
+    var id = ++seq;
+    var bub = addRow('ai', '');
+    pending[id] = { bub: bub, text: '' };
+
+    var body = JSON.stringify({
+      username: cfg.user,
+      session_id: cfg.session,
+      message: text,
+      enable_streaming: true
+    });
+
+    log('> POST ' + cfg.url + ' ' + body.slice(0, 300));
+    setDot('', '说话中');
+    native('chat', [String(id), cfg.url, cfg.key, body]);
+  }
+
+  /* --- 输入框 --- */
+  inp.addEventListener('input', function () {
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 132) + 'px';
+    sendBtn.disabled = !inp.value.trim();
+  });
+
+  inp.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendBtn.disabled) send();
+    }
+  });
+
+  sendBtn.addEventListener('click', send);
+
+  /* --- 设置 --- */
+  var panel = document.getElementById('panel');
+
+  document.getElementById('btnSet').addEventListener('click', function () {
+    document.getElementById('cUrl').value = cfg.url;
+    document.getElementById('cKey').value = cfg.key;
+    document.getElementById('cUser').value = cfg.user;
+    document.getElementById('cSess').value = cfg.session;
+    logBox.classList.add('show');
+    panel.classList.add('show');
+  });
+
+  document.getElementById('close').addEventListener('click', function () {
+    panel.classList.remove('show');
+  });
+
+  document.getElementById('ok').addEventListener('click', function () {
+    cfg.url = document.getElementById('cUrl').value.trim() || DEF.url;
+    cfg.key = document.getElementById('cKey').value.trim();
+    cfg.user = document.getElementById('cUser').value.trim() || DEF.user;
+    cfg.session = document.getElementById('cSess').value.trim() || DEF.session;
+    save();
+    panel.classList.remove('show');
+    setDot('', '未连接');
+  });
+
+  /* 回来时探一下活着没 */
+  function ping() {
+    if (!window.AndroidApp || !cfg.key) return;
+    var base = cfg.url.replace(/\/api\/v1\/chat$/, '');
+    var id = ++seq;
+    pending[id] = { bub: document.createElement('div'), text: '', probe: true };
+    var u = base + '/api/v1/chat/sessions?username=' + encodeURIComponent(cfg.user) + '&page=1&page_size=1';
+    window.AndroidApp.get(String(id), u, cfg.key);
+    log('> GET ' + u);
+  }
+
+  setTimeout(ping, 600);
+})();
+</script>
+</body>
+</html>
