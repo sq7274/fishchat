@@ -47,8 +47,10 @@ public class MainActivity extends Activity {
     }
 
     /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
-    private static final String REMOTE_INDEX =
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html";
+    private static final String[] REMOTE_INDEX = {
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html"
+    };
     private static final String CACHE_FILE = "remote_index.html";
 
     private void loadLocal() {
@@ -76,16 +78,22 @@ public class MainActivity extends Activity {
     }
 
     private void tryLoadRemote() {
+        for (String remote : REMOTE_INDEX) {
+            if (tryOneRemote(remote)) return;
+        }
+    }
+
+    private boolean tryOneRemote(String remote) {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(REMOTE_INDEX).openConnection();
+            c = (HttpURLConnection) new URL(remote).openConnection();
             c.setConnectTimeout(8000);
             c.setReadTimeout(12000);
             c.setRequestProperty("Cache-Control", "no-cache");
-            if (c.getResponseCode() != 200) return;
+            if (c.getResponseCode() != 200) return false;
             final String html = readAllBytes(c.getInputStream());
-            if (!looksLikeApp(html)) return;
-            if (html.equals(readCache())) return;
+            if (!looksLikeApp(html)) return false;
+            if (html.equals(readCache())) return true;
             try (java.io.FileOutputStream fo =
                          new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
                 fo.write(html.getBytes("UTF-8"));
@@ -95,8 +103,10 @@ public class MainActivity extends Activity {
                     web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
                 }
             });
+            return true;
         } catch (Exception ignored) {
             /* 网络不行就继续用本地的 */
+            return false;
         } finally {
             if (c != null) c.disconnect();
         }
