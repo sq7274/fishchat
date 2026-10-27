@@ -424,7 +424,7 @@
     /* 老版原生自带选图上传，新版走网页自己的 input file */
     if (window.AndroidApp && typeof window.AndroidApp.pickImage === 'function') {
       var id = ++seq;
-      pending[id] = { bub: null, text: inp.value.trim(), err: '', aid: '', np: true };
+      pending[id] = { bub: null, text: '', said: inp.value.trim(), err: '', aid: '', np: true };
       setDot('', '选图中');
       try {
         window.AndroidApp.pickImage(String(id), cfg.url.replace(/\/chat$/, '') + '/files', cfg.key);
@@ -449,7 +449,7 @@
     sendBtn.disabled = true;
     var bub = addRow('ai', '');
     var id2 = ++seq;
-    pending[id2] = { bub: bub, text: text, err: '', aid: aid };
+    pending[id2] = { bub: bub, text: '', said: text, err: '', aid: aid };
     fireChat(id2, pending[id2]);
   };
 
@@ -537,7 +537,7 @@
 
   function fireChat(id, st) {
     var parts = [];
-    var said = st.text;
+    var said = st.said || '';
     if (st.aid) {
       /* 图一定带上，模型至少知道有图；看不看得见取决于模型 */
       parts.push({ type: 'image', attachment_id: st.aid });
@@ -576,7 +576,7 @@
 
     var id = ++seq;
     var bub = addRow('ai', '');
-    pending[id] = { bub: bub, text: text, err: '', aid: '' };
+    pending[id] = { bub: bub, text: '', said: text, err: '', aid: '' };
 
     if (pic) {
       clearPick();
