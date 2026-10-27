@@ -1,8 +1,11 @@
 package com.dafeiyu.chat;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -38,7 +41,26 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
 
         web.setWebViewClient(new WebViewClient());
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
+                                             FileChooserParams params) {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                }
+                filePathCallback = cb;
+                try {
+                    Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("image/*");
+                    startActivityForResult(Intent.createChooser(i, "选张图"), REQ_FILE);
+                    return true;
+                } catch (Exception e) {
+                    filePathCallback = null;
+                    return false;
+                }
+            }
+        });
         web.addJavascriptInterface(new Bridge(), "AndroidApp");
 
         setContentView(web);
@@ -46,12 +68,28 @@ public class MainActivity extends Activity {
         new Thread(this::tryLoadRemote).start();
     }
 
+    private ValueCallback<Uri[]> filePathCallback;
+    private static final int REQ_FILE = 1001;
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        if (req == REQ_FILE) {
+            if (filePathCallback == null) return;
+            Uri[] out = null;
+            if (res == Activity.RESULT_OK && data != null && data.getData() != null) {
+                out = new Uri[]{data.getData()};
+            }
+            filePathCallback.onReceiveValue(out);
+            filePathCallback = null;
+            return;
+        }
+        super.onActivityResult(req, res, data);
+    }
+
     /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
-    private static final String[] REMOTE_INDEX = {
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html"
-    };
-    private static final String CACHE_FILE = "remote_index.html";
+    private static final String REMOTE_INDEX =
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html";
+    private static final String CACHE_FILE = "remote_index_v2.html";
 
     private void loadLocal() {
         String cached = readCache();
@@ -78,22 +116,16 @@ public class MainActivity extends Activity {
     }
 
     private void tryLoadRemote() {
-        for (String remote : REMOTE_INDEX) {
-            if (tryOneRemote(remote)) return;
-        }
-    }
-
-    private boolean tryOneRemote(String remote) {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(remote).openConnection();
+            c = (HttpURLConnection) new URL(REMOTE_INDEX).openConnection();
             c.setConnectTimeout(8000);
             c.setReadTimeout(12000);
             c.setRequestProperty("Cache-Control", "no-cache");
-            if (c.getResponseCode() != 200) return false;
+            if (c.getResponseCode() != 200) return;
             final String html = readAllBytes(c.getInputStream());
-            if (!looksLikeApp(html)) return false;
-            if (html.equals(readCache())) return true;
+            if (!looksLikeApp(html)) return;
+            if (html.equals(readCache())) return;
             try (java.io.FileOutputStream fo =
                          new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
                 fo.write(html.getBytes("UTF-8"));
@@ -103,10 +135,8 @@ public class MainActivity extends Activity {
                     web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
                 }
             });
-            return true;
         } catch (Exception ignored) {
             /* 网络不行就继续用本地的 */
-            return false;
         } finally {
             if (c != null) c.disconnect();
         }
@@ -133,6 +163,18 @@ public class MainActivity extends Activity {
 
     private void emitDone(String id, int status, String err) {
         js("window.__done(" + id + "," + status + "," + JSONObject.quote(err == null ? "" : err) + ")");
+    }
+
+    private void emitUploaded(String id, int code, String resp) {
+        js("window.__uploaded(" + id + "," + code + ","
+                + JSONObject.quote(resp == null ? "" : resp) + ")");
+    }
+
+    /* 聊天记录落盘，重启不丢 */
+    private java.io.File histFile(String session) {
+        String name = session == null || session.isEmpty() ? "default"
+                : session.replaceAll("[^A-Za-z0-9_-]", "_");
+        return new java.io.File(getFilesDir(), "hist_" + name + ".json");
     }
 
     private static String readAll(InputStream in) {
@@ -202,6 +244,73 @@ public class MainActivity extends Activity {
                 } finally {
                     if (c != null) c.disconnect();
                 }
+            }).start();
+        }
+
+        /**
+         * 上传图片：base64 进来，multipart 发到 /api/v1/files，回 attachment_id。
+         */
+        @JavascriptInterface
+        public void upload(final String id, final String url, final String key,
+                           final String b64, final String filename) {
+            new Thread(() -> {
+                HttpURLConnection c = null;
+                try {
+                    byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                    String boundary = "----fish" + System.currentTimeMillis();
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setConnectTimeout(20000);
+                    c.setReadTimeout(180000);
+                    c.setRequestProperty("Authorization", "Bearer " + key);
+                    c.setRequestProperty("Content-Type",
+                            "multipart/form-data; boundary=" + boundary);
+                    c.setDoOutput(true);
+
+                    String safe = filename == null ? "image.jpg" : filename.replace("\"", "");
+                    String ctype = safe.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+                    try (OutputStream os = c.getOutputStream()) {
+                        os.write(("--" + boundary + "\r\n"
+                                + "Content-Disposition: form-data; name=\"file\"; filename=\""
+                                + safe + "\"\r\n"
+                                + "Content-Type: " + ctype + "\r\n\r\n").getBytes("UTF-8"));
+                        os.write(data);
+                        os.write(("\r\n--" + boundary + "--\r\n").getBytes("UTF-8"));
+                    }
+
+                    int code = c.getResponseCode();
+                    InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                    emitUploaded(id, code, readAllBytes(in));
+                } catch (Exception e) {
+                    emitUploaded(id, 0, e.toString());
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }).start();
+        }
+
+        /** 聊天记录存手机文件：window.saveHist(session, json) */
+        @JavascriptInterface
+        public void saveHist(final String session, final String json) {
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(histFile(session))) {
+                fo.write((json == null || json.isEmpty() ? "[]" : json).getBytes("UTF-8"));
+            } catch (Exception ignored) {
+            }
+        }
+
+        /** 读回聊天记录，回调 window.__histLoaded(session, json) */
+        @JavascriptInterface
+        public void loadHist(final String session) {
+            new Thread(() -> {
+                String s = "";
+                try {
+                    java.io.File f = histFile(session);
+                    if (f.exists()) s = readAllBytes(new java.io.FileInputStream(f));
+                } catch (Exception ignored) {
+                }
+                js("window.__histLoaded && window.__histLoaded("
+                        + JSONObject.quote(session == null ? "" : session) + ","
+                        + JSONObject.quote(s) + ")");
             }).start();
         }
 

@@ -45,6 +45,17 @@
   #send{background:#1c3748;border:none;color:#8fd8f5;border-radius:19px;
     padding:10px 17px;font:15px inherit;flex:0 0 auto}
   #send:disabled{opacity:.35}
+  #plus{background:none;border:1px solid #1e2b36;color:#7d8b99;border-radius:50%;
+    width:41px;height:41px;flex:0 0 auto;font:20px/1 inherit;padding:0 0 2px}
+  #plus:active{border-color:#2a4557;color:#9fe0ff}
+  .bub img{display:block;max-width:100%;max-height:260px;border-radius:10px;margin:0 0 6px}
+  .bub.onlyimg{padding:4px;background:#131c24}
+  #preview{display:none;gap:10px;align-items:center;padding:9px 12px 0}
+  #preview.show{display:flex}
+  #preview img{width:52px;height:52px;object-fit:cover;border-radius:9px;border:1px solid #1e2b36}
+  #preview .x{color:#7d8b99;font-size:13px;padding:5px 4px}
+  #preview .pn{font-size:11px;color:#5a6a78;flex:1}
+  #wipe{background:#161e26;color:#c9737a}
 
   #panel{position:fixed;inset:0;background:#080d11;display:none;flex-direction:column;
     padding:calc(env(safe-area-inset-top) + 18px) 18px calc(env(safe-area-inset-bottom) + 18px);z-index:9}
@@ -61,6 +72,8 @@
     border-radius:9px;padding:10px;max-height:40vh;overflow:auto;margin-bottom:14px;display:none}
   #log.show{display:block}
   #panel .btns{display:flex;gap:10px;margin-top:auto}
+  .f label.chk{display:flex;align-items:center;gap:7px;color:#d7e2ea;font-size:13px;margin:0}
+  .f label.chk input{width:auto;height:auto;margin:0}
   #panel .btns button{flex:1;padding:12px;border-radius:11px;border:none;font:14px inherit}
   #ok{background:#1c3748;color:#9fe0ff}
   #close{background:#161e26;color:#8b98a6}
@@ -76,10 +89,17 @@
     <button id="btnSet">设置</button>
   </header>
   <div id="msgs"><div class="empty">还没说话</div></div>
+  <div id="preview">
+    <img id="pImg" alt="">
+    <span class="pn" id="pName">图片</span>
+    <span class="x" id="pDel">×</span>
+  </div>
   <footer>
+    <button id="plus">+</button>
     <textarea id="inp" rows="1" placeholder="说点什么"></textarea>
     <button id="send" disabled>发</button>
   </footer>
+  <input type="file" id="pick" accept="image/*" style="display:none">
 </div>
 
 <div id="panel">
@@ -104,8 +124,13 @@
     <input id="cSess" spellcheck="false">
     <div class="h">换个值就是开一段新对话</div>
   </div>
+  <div class="f">
+    <label>图片</label>
+    <div class="h">发图会先传到 AstrBot 再一起发。现在这模型看不见画面，只知道有张图。</div>
+  </div>
   <div id="log"></div>
   <div class="btns">
+    <button id="wipe">清空记录</button>
     <button id="close">关掉</button>
     <button id="ok">保存</button>
   </div>
@@ -170,17 +195,93 @@
     msgs.scrollTop = msgs.scrollHeight;
   }
 
-  function addRow(who, text) {
+  function addRow(who, text, img) {
     clearEmpty();
     var row = document.createElement('div');
     row.className = 'row ' + who;
     var bub = document.createElement('div');
     bub.className = 'bub';
-    bub.textContent = text || '';
+    if (img) {
+      var im = document.createElement('img');
+      im.src = img;
+      bub.appendChild(im);
+      if (!text) bub.className = 'bub onlyimg';
+    }
+    if (text) bub.appendChild(document.createTextNode(text));
     row.appendChild(bub);
     msgs.appendChild(row);
     scroll();
     return bub;
+  }
+
+  /* --- 聊天记录：按 session 存在本地 --- */
+  var hist = [];
+  var HKEY = 'fish_hist_' + cfg.session;
+
+  function loadHist() {
+    try {
+      var raw = localStorage.getItem(HKEY);
+      var a = raw ? JSON.parse(raw) : [];
+      return Array.isArray(a) ? a : [];
+    } catch (e) { return []; }
+  }
+
+  function saveHist() {
+    try {
+      while (hist.length > 120) hist.shift();
+      localStorage.setItem(HKEY, JSON.stringify(hist));
+    } catch (e) {
+      /* 存不下就减半再试一次 */
+      try {
+        hist = hist.slice(-40);
+        localStorage.setItem(HKEY, JSON.stringify(hist));
+      } catch (e2) {}
+    }
+    saveNative();
+  }
+
+  /* 再往手机文件里写一份，重启才不丢 */
+  function saveNative() {
+    try {
+      if (!(window.AndroidApp && window.AndroidApp.saveHist)) return;
+      var s = JSON.stringify(hist);
+      if (s.length > 2500000) {
+        for (var i = 0; i < hist.length && s.length > 2500000; i++) {
+          if (hist[i].img) { hist[i].img = ''; s = JSON.stringify(hist); }
+        }
+      }
+      window.AndroidApp.saveHist(cfg.session, s);
+    } catch (e) {}
+  }
+
+  /* 原生把上次的记录送回来 */
+  window.__histLoaded = function (sess, json) {
+    if (sess !== cfg.session || !json) return;
+    try {
+      var a = JSON.parse(json);
+      if (!Array.isArray(a) || !a.length) return;
+      if (a.length <= hist.length) return;   /* 本地的没少就不折腾 */
+      hist = a;
+      msgs.innerHTML = '';
+      renderHist();
+      scroll();
+    } catch (e) {}
+  };
+
+  function pushHist(rec) {
+    hist.push(rec);
+    saveHist();
+  }
+
+  function renderHist() {
+    if (!hist.length) return;
+    var e = msgs.querySelector('.empty');
+    if (e) e.remove();
+    for (var i = 0; i < hist.length; i++) {
+      var r = hist[i] || {};
+      addRow(r.who === 'me' ? 'me' : 'ai', r.text || '', r.img || '');
+    }
+    scroll();
   }
 
   /* 从任意形状的 JSON 里抠出文本 */
@@ -275,6 +376,7 @@
         }
       } else {
         setDot('on', '在线');
+        pushHist({ who: 'ai', text: st.text, img: '' });
       }
     } else if (code === 0) {
       setDot('err', '连不上');
@@ -298,43 +400,190 @@
     return false;
   }
 
+  /* --- 选图 / 上传 --- */
+  var pick = document.getElementById('pick');
+  var preview = document.getElementById('preview');
+  var pImg = document.getElementById('pImg');
+  var pName = document.getElementById('pName');
+  var pendingImg = null;   /* {b64, data, name} */
+
+  document.getElementById('plus').addEventListener('click', function () {
+    /* 老版原生自带选图上传，新版走网页自己的 input file */
+    if (window.AndroidApp && typeof window.AndroidApp.pickImage === 'function') {
+      var id = ++seq;
+      pending[id] = { bub: null, text: inp.value.trim(), err: '', aid: '', np: true };
+      setDot('', '选图中');
+      try {
+        window.AndroidApp.pickImage(String(id), cfg.url.replace(/\/chat$/, '') + '/files', cfg.key);
+      } catch (e) { delete pending[id]; pick.click(); }
+      return;
+    }
+    pick.click();
+  });
+
+  /* 老版原生的选图回调：__imageResult(id, ok, attachmentId, name) */
+  window.__imageResult = function (id, ok, aid) {
+    var st = pending[id];
+    if (!st) return;
+    delete pending[id];
+    setDot('', '在线');
+    if (!ok) { log('!! 选图没成 ' + String(aid).slice(0, 200)); return; }
+    var text = inp.value.trim();
+    addRow('me', text, '');
+    pushHist({ who: 'me', text: text, img: '' });
+    inp.value = '';
+    inp.style.height = 'auto';
+    sendBtn.disabled = true;
+    var bub = addRow('ai', '');
+    var id2 = ++seq;
+    pending[id2] = { bub: bub, text: text, err: '', aid: aid };
+    fireChat(id2, pending[id2]);
+  };
+
+  document.getElementById('pDel').addEventListener('click', clearPick);
+
+  function clearPick() {
+    pendingImg = null;
+    pick.value = '';
+    preview.classList.remove('show');
+    pImg.removeAttribute('src');
+    sendBtn.disabled = !inp.value.trim();
+  }
+
+  function fitImg(file, cb) {
+    var fr = new FileReader();
+    fr.onload = function () {
+      var im = new Image();
+      im.onload = function () {
+        var w = im.width, h = im.height;
+        var mk = function (maxw, q) {
+          var k = Math.min(1, maxw / Math.max(w, h));
+          var cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round(w * k));
+          cv.height = Math.max(1, Math.round(h * k));
+          cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+          return cv.toDataURL('image/jpeg', q);
+        };
+        cb(mk(1280, 0.82), mk(360, 0.62));
+      };
+      im.onerror = function () { cb(null, null); };
+      im.src = fr.result;
+    };
+    fr.onerror = function () { cb(null, null); };
+    fr.readAsDataURL(file);
+  }
+
+  pick.addEventListener('change', function () {
+    var f = pick.files && pick.files[0];
+    if (!f) return;
+    if (f.size > 12 * 1024 * 1024) {
+      pName.textContent = '太大了，换张小点的';
+      preview.classList.add('show');
+      return;
+    }
+    fitImg(f, function (big, small) {
+      if (!big) { pName.textContent = '读不出来这张'; preview.classList.add('show'); return; }
+      pendingImg = { b64: big.split(',')[1] || '', data: big, thumb: small, name: f.name || 'image.jpg' };
+      pImg.src = big;
+      pName.textContent = f.name || '图片';
+      preview.classList.add('show');
+      sendBtn.disabled = false;
+      scroll();
+    });
+  });
+
+  /* 原生把 base64 传回：__uploaded(id, code, resp) */
+  window.__uploaded = function (id, code, resp) {
+    var st = pending[id];
+    if (!st) return;
+    if (code !== 200) {
+      st.bub.className = 'bub err';
+      st.bub.textContent = '图片没传上去（' + code + '）\n' + String(resp).slice(0, 300);
+      delete pending[id];
+      sendBtn.disabled = false;
+      setDot('err', '上传失败');
+      return;
+    }
+    var aid = '';
+    try {
+      var o = JSON.parse(resp);
+      aid = (o && o.data && o.data.attachment_id) || (o && o.attachment_id) || '';
+    } catch (e) {}
+    if (!aid) {
+      st.bub.className = 'bub err';
+      st.bub.textContent = '图片上传没拿到 id：' + String(resp).slice(0, 300);
+      delete pending[id];
+      sendBtn.disabled = false;
+      return;
+    }
+    st.bub.textContent = '';
+    st.aid = aid;
+    log('> 上传成功 ' + aid);
+    fireChat(id, st);
+  };
+
+  function fireChat(id, st) {
+    var parts = [];
+    var said = st.text;
+    if (st.aid) {
+      /* 图一定带上，模型至少知道有图；看不看得见取决于模型 */
+      parts.push({ type: 'image', attachment_id: st.aid });
+      if (!said) said = '（发了张图）';
+    }
+    if (said) parts.push({ type: 'plain', text: said });
+    var body = JSON.stringify({
+      username: cfg.user,
+      session_id: cfg.session,
+      message: parts,
+      enable_streaming: true
+    });
+    log('> POST ' + cfg.url + ' ' + body.slice(0, 300));
+    setDot('', '说话中');
+    native('chat', [String(id), cfg.url, cfg.key, body]);
+  }
+
   function send() {
     var text = inp.value.trim();
-    if (!text) return;
+    var pic = pendingImg;
+    if (!text && !pic) return;
     if (!window.AndroidApp) {
-      addRow('me', text);
+      addRow('me', text, pic ? pic.thumb : '');
       var b = addRow('ai', '');
       b.className = 'bub err';
       b.textContent = '这不是在 APP 里打开的，没有原生通道。';
       return;
     }
 
-    addRow('me', text);
+    addRow('me', text, pic ? pic.thumb : '');
+    pushHist({ who: 'me', text: text || '', img: pic ? pic.thumb : '' });
+
     inp.value = '';
     inp.style.height = 'auto';
     sendBtn.disabled = true;
 
     var id = ++seq;
     var bub = addRow('ai', '');
-    pending[id] = { bub: bub, text: '', err: '' };
+    pending[id] = { bub: bub, text: text, err: '', aid: '' };
 
-    var body = JSON.stringify({
-      username: cfg.user,
-      session_id: cfg.session,
-      message: text,
-      enable_streaming: true
-    });
-
-    log('> POST ' + cfg.url + ' ' + body.slice(0, 300));
-    setDot('', '说话中');
-    native('chat', [String(id), cfg.url, cfg.key, body]);
+    if (pic) {
+      clearPick();
+      sendBtn.disabled = true;
+      var upUrl = cfg.url.replace(/\/chat$/, '') + '/files';
+      log('> 上传图片 ' + pic.name + ' -> ' + upUrl);
+      setDot('', '传图中');
+      pending[id].text = text;
+      native('upload', [String(id), upUrl, cfg.key, pic.b64, pic.name]);
+      return;
+    }
+    clearPick();
+    fireChat(id, pending[id]);
   }
 
   /* --- 输入框 --- */
   inp.addEventListener('input', function () {
     inp.style.height = 'auto';
     inp.style.height = Math.min(inp.scrollHeight, 132) + 'px';
-    sendBtn.disabled = !inp.value.trim();
+    sendBtn.disabled = !(inp.value.trim() || pendingImg);
   });
 
   inp.addEventListener('keydown', function (e) {
@@ -363,6 +612,7 @@
   });
 
   document.getElementById('ok').addEventListener('click', function () {
+    var oldKey = HKEY;
     cfg.url = document.getElementById('cUrl').value.trim() || DEF.url;
     cfg.key = document.getElementById('cKey').value.trim();
     cfg.user = document.getElementById('cUser').value.trim() || DEF.user;
@@ -370,6 +620,22 @@
     save();
     panel.classList.remove('show');
     setDot('', '未连接');
+    HKEY = 'fish_hist_' + cfg.session;
+    if (HKEY !== oldKey) {
+      hist = loadHist();
+      msgs.innerHTML = '';
+      if (!hist.length) msgs.innerHTML = '<div class="empty">还没说话</div>';
+      renderHist();
+    }
+    ping();
+  });
+
+  document.getElementById('wipe').addEventListener('click', function () {
+    if (!confirm('清掉这段对话在本地的记录？服务器那边的还在。')) return;
+    hist = [];
+    try { localStorage.removeItem(HKEY); } catch (e) {}
+    msgs.innerHTML = '<div class="empty">还没说话</div>';
+    panel.classList.remove('show');
   });
 
   /* 回来时探一下活着没 */
@@ -381,6 +647,13 @@
     var u = base + '/api/v1/chat/sessions?username=' + encodeURIComponent(cfg.user) + '&page=1&page_size=1';
     window.AndroidApp.get(String(id), u, cfg.key);
     log('> GET ' + u);
+  }
+
+  /* 开局：把上次的聊天贴回来 */
+  hist = loadHist();
+  if (hist.length) renderHist();
+  if (window.AndroidApp && window.AndroidApp.loadHist) {
+    try { window.AndroidApp.loadHist(cfg.session); } catch (e) {}
   }
 
   setTimeout(ping, 600);
