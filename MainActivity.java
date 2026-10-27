@@ -42,7 +42,64 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "AndroidApp");
 
         setContentView(web);
-        web.loadUrl("file:///android_asset/index.html");
+        if (web != null) loadLocal();
+        new Thread(this::tryLoadRemote).start();
+    }
+
+    /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
+    private static final String REMOTE_INDEX =
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html";
+    private static final String CACHE_FILE = "remote_index.html";
+
+    private void loadLocal() {
+        String cached = readCache();
+        if (cached != null) {
+            web.loadDataWithBaseURL("file:///android_asset/", cached, "text/html", "UTF-8", null);
+        } else {
+            web.loadUrl("file:///android_asset/index.html");
+        }
+    }
+
+    private static boolean looksLikeApp(String s) {
+        return s != null && s.length() > 2000 && s.contains("window.__chunk") && s.contains("</html>");
+    }
+
+    private String readCache() {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), CACHE_FILE);
+            if (!f.exists()) return null;
+            String s = readAllBytes(new java.io.FileInputStream(f));
+            return looksLikeApp(s) ? s : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void tryLoadRemote() {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(REMOTE_INDEX).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(12000);
+            c.setRequestProperty("Cache-Control", "no-cache");
+            if (c.getResponseCode() != 200) return;
+            final String html = readAllBytes(c.getInputStream());
+            if (!looksLikeApp(html)) return;
+            if (html.equals(readCache())) return;
+            try (java.io.FileOutputStream fo =
+                         new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
+                fo.write(html.getBytes("UTF-8"));
+            }
+            runOnUiThread(() -> {
+                if (web != null) {
+                    web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
+                }
+            });
+        } catch (Exception ignored) {
+            /* 网络不行就继续用本地的 */
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     @Override

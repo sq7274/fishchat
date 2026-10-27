@@ -210,28 +210,38 @@
     return '';
   }
 
-  window.__chunk = function (id, line) {
+  /* 原生是按行回调的；万一整块进来也拆开处理 */
+  window.__chunk = function (id, chunk) {
     var st = pending[id];
-    if (!st) return;
+    if (!st || !chunk) return;
+    var lines = String(chunk).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) onChunkLine(st, lines[i]);
+  };
+
+  function onChunkLine(st, line) {
     if (!line) return;
 
-    if (line.indexOf('data:') !== 0) return;
-    var raw = line.slice(5).trim();
+    var raw;
+    if (line.indexOf('data:') === 0) raw = line.slice(5).trim();
+    else if (/^\s*[[{]/.test(line)) raw = line.trim();   /* 非 SSE 的裸 JSON，多半是错误 */
+    else return;
     if (!raw || raw === '[DONE]') return;
 
     var o;
     try { o = JSON.parse(raw); } catch (e) { return; }
     if (!o || typeof o !== 'object') return;
 
-    /* 思考过程不算正文，丢掉 */
-    if (o.chain_type === 'reasoning') {
-      setDot('', '想事情');
+    /* 服务端把错误当 200 返回时会走到这 */
+    if (o.status === 'error' || o.type === 'error' || o.type === 'err') {
+      st.err = String(o.message || o.data || raw).slice(0, 300);
+      st.bub.className = 'bub err';
+      st.bub.textContent = '出错了：' + st.err;
       return;
     }
 
-    if (o.type === 'error' || o.type === 'err') {
-      st.bub.className = 'bub err';
-      st.bub.textContent = '出错了：' + String(o.data || o.message || raw).slice(0, 300);
+    /* 思考过程不算正文，丢掉 */
+    if (o.chain_type === 'reasoning') {
+      setDot('', '想事情');
       return;
     }
 
@@ -256,8 +266,16 @@
     delete pending[id];
     log('> status ' + code + (err ? ' ' + String(err).slice(0, 400) : ''));
     if (code === 200) {
-      setDot('on', '在线');
-      if (!st.text) st.bub.textContent = '（没说话）';
+      if (!st.text) {
+        if (st.err) {
+          setDot('err', '出错');
+        } else {
+          setDot('on', '在线');
+          st.bub.textContent = '（没说话）';
+        }
+      } else {
+        setDot('on', '在线');
+      }
     } else if (code === 0) {
       setDot('err', '连不上');
       st.bub.className = 'bub err';
@@ -298,7 +316,7 @@
 
     var id = ++seq;
     var bub = addRow('ai', '');
-    pending[id] = { bub: bub, text: '' };
+    pending[id] = { bub: bub, text: '', err: '' };
 
     var body = JSON.stringify({
       username: cfg.user,
