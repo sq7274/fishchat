@@ -346,14 +346,27 @@
       return;
     }
 
+    /* 只认正文类事件；工具调用、统计、状态这些一概不显示 */
+    if (o.type && ['plain', 'text', 'image', 'record', 'end'].indexOf(o.type) < 0) return;
+
     var txt = '';
     if (typeof o.data === 'string') txt = o.data;
-    else if (o.data && typeof o.data === 'object') txt = pick(o.data);
-    if (!txt) txt = pick(o);
+    else if (o.data && typeof o.data === 'object') {
+      txt = (typeof o.data.text === 'string' && o.data.text) ||
+            (typeof o.data.content === 'string' && o.data.content) || '';
+    }
+    if (!txt && o.choices && o.choices[0] && o.choices[0].delta) {
+      txt = o.choices[0].delta.content || '';
+    }
     if (!txt) return;
 
-    /* 累加式 vs 全量式，俩都兜住 */
+    /* 兜底：漏出来的工具调用 / 内部 JSON 不往界面上怼 */
+    if (/^\s*\{\s*"(id|name|args|arguments|tool_calls|ts)"/.test(txt)) return;
+
+    /* 累加式 vs 全量式，俩都兜住；重复回滚的不重复画 */
     if (txt.indexOf(st.text) === 0) st.text = txt;
+    else if (st.text && st.text.indexOf(txt) === 0) { return; }
+    else if (st.text && txt.length > 8 && st.text.slice(-txt.length) === txt) { return; }
     else st.text += txt;
 
     if (!st.mounted) { st.mounted = true; }
