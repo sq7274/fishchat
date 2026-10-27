@@ -115,30 +115,44 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static final String[] REMOTE_INDEXES = {
+            /* 主源：raw + 时间戳绕 CDN；备源走镜像，防 raw 被墙 */
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://ghproxy.net/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://gh-proxy.com/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html"
+    };
+
     private void tryLoadRemote() {
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(REMOTE_INDEX).openConnection();
-            c.setConnectTimeout(8000);
-            c.setReadTimeout(12000);
-            c.setRequestProperty("Cache-Control", "no-cache");
-            if (c.getResponseCode() != 200) return;
-            final String html = readAllBytes(c.getInputStream());
-            if (!looksLikeApp(html)) return;
-            if (html.equals(readCache())) return;
-            try (java.io.FileOutputStream fo =
-                         new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
-                fo.write(html.getBytes("UTF-8"));
-            }
-            runOnUiThread(() -> {
-                if (web != null) {
-                    web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
+        String cached = readCache();
+        for (String base : REMOTE_INDEXES) {
+            HttpURLConnection c = null;
+            try {
+                String u = base + (base.contains("?") ? "&" : "?") + "t=" + System.currentTimeMillis();
+                c = (HttpURLConnection) new URL(u).openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(12000);
+                c.setRequestProperty("Cache-Control", "no-cache, no-store");
+                c.setRequestProperty("Pragma", "no-cache");
+                c.setRequestProperty("User-Agent", "DaFeiYu-App/1.2");
+                if (c.getResponseCode() != 200) continue;
+                final String html = readAllBytes(c.getInputStream());
+                if (!looksLikeApp(html)) continue;
+                if (html.equals(cached)) return;   /* 已经是最新，不用重载 */
+                try (java.io.FileOutputStream fo =
+                             new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
+                    fo.write(html.getBytes("UTF-8"));
                 }
-            });
-        } catch (Exception ignored) {
-            /* 网络不行就继续用本地的 */
-        } finally {
-            if (c != null) c.disconnect();
+                runOnUiThread(() -> {
+                    if (web != null) {
+                        web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
+                    }
+                });
+                return;
+            } catch (Exception ignored) {
+                /* 这个源不行，换下一个 */
+            } finally {
+                if (c != null) c.disconnect();
+            }
         }
     }
 
