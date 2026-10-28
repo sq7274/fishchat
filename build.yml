@@ -1,0 +1,85 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare SDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/*$::')
+          PLATDIR=$(ls -d "$ANDROID_HOME"/platforms/android-*/ 2>/dev/null | sort -V | tail -1 | sed 's:/*$::')
+          echo "BT=$BT" >> $GITHUB_ENV
+          echo "PLATDIR=$PLATDIR" >> $GITHUB_ENV
+          echo "build-tools=$BT"
+          echo "platform=$PLATDIR"
+          "$BT/aapt2" version
+          test -f "$PLATDIR/android.jar"
+
+      - name: Compile APK
+        run: |
+          set -euo pipefail
+
+          mkdir -p assets res/drawable
+          if [ -f index.html ]; then mv -f index.html assets/index.html; fi
+          if [ -f ic_launcher.xml ]; then mv -f ic_launcher.xml res/drawable/ic_launcher.xml; fi
+
+          PLAT="$PLATDIR/android.jar"
+          rm -rf out && mkdir -p out/classes out/gen
+
+          "$BT/aapt2" compile --dir res -o out/res.zip
+
+          "$BT/aapt2" link \
+            -o out/base.apk \
+            -I "$PLAT" \
+            --manifest AndroidManifest.xml \
+            -A assets \
+            --java out/gen \
+            --min-sdk-version 24 \
+            --target-sdk-version 34 \
+            --version-code 1 \
+            --version-name "1.0" \
+            out/res.zip
+
+          find out/gen -name '*.java' > out/srcs.txt
+          echo "MainActivity.java" >> out/srcs.txt
+          javac -encoding UTF-8 -nowarn -source 17 -target 17 -cp "$PLAT" -d out/classes @"out/srcs.txt"
+
+          mkdir -p out/dex
+          find out/classes -name '*.class' > out/classes.txt
+          "$BT/d8" --lib "$PLAT" --release --min-api 24 --output out/dex @"out/classes.txt"
+
+          cp out/base.apk out/app-unsigned.apk
+          (cd out/dex && zip -q -j ../app-unsigned.apk classes.dex)
+
+          "$BT/zipalign" -f 4 out/app-unsigned.apk out/app-aligned.apk
+
+          # 固定签名：永远用同一把钥匙，才能覆盖安装
+          echo 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCpCEOuX4tG9Ca+B7z4EAcgJTL4vYzKcM4wV6npbfDOcugL0VH5SFVwX9c2uKMC0fmzjUdSV+/qbTU4gwC7BtZk7m4311QlKzMsJ0inL4R1DDI5C0C5c69MsVbulxuBZeUaYEuTyueeD8hx/gDYeEfj7jOQscFPJYKIzzMHXus2jFXNGdUWaaSjkP1s+uBjMLE5vhaT4FHBVMHc0GSL62C68gbdYLhuT5DQonPQaD9A1lDn4IbQ8craFvUsRD0vKzfzOxDj/eppKQ6V100ryKWzGarQpnvS2tOCZAG0n9J+U3o0sUMg6RGiEkCsDL9DnCReRb6/XMpdisMt0dqIk8kVAgMBAAECggEADka3lKrW1BN7PDHiHh9twqNxq9GH6nHe8Eqke/sq9fzS0sCx8uMkQt1NYNP1AfV4aKz7g526vSrObmtIwgMV/iinIB9B05vTnXHkmyjnv+JbpuFnl4zeQZTOz1BC5J8VsQXGDFb8UKdrmg5xGtdZ1ws/dAPssZcXmx9zjgv7GLxb26i694tvCotQD5ETQy8+W++/29eG0WN8dAPEgYqS4+x1Gsqx17QopG0ThY1OyDB67DOtN2ngmONMWXqIEmRwehCgokgsPrJ5/64kMvCEOzcQRNiVHtML0ssWPmBQCd6eSeRJozDnYbNCGUe3AXJexSBEC8dGC9Unc4CeaK0MRwKBgQDo8PGqVlEH1LN1Swnvh3rX59tiyJYQt7dOenmF+oS9+1zm+TxTw0Qf2TC1641NGXVbBlm9c6lWwvkNmRVg0B8gNX35rcs+0wFFf8tnL7VEIXYJcfcngyLqZBOkc5d8bnXFNOS6ruiIVsKK7RJv+sMcKdQLszShoRsYC3lIUnRKSwKBgQC5w8d54PAj2cGXkfWetuM3xtC2gsqLHj5oOPVvh/xDtoZM24afGA4lc8bQGFLdHjeF8rwKClxRNqQOb149yNHiwwt5ivebrMjPcC5EfAvlbISREi3kryuPF8/xRTM8m8Wed6jJzg11seT/e1Kx9WdRKft6JJHVHJSEMzdYRR4eHwKBgEeH/d4d5YIvGfCx21o300xLwb3i9NorYFn0GC9BT9P7RXsUHCdothnFm0SyEdEUOUp7d8FKrDydYNeBI+R35KcCZi3u5ZPkPea2qKKGLva+A75AxfHXPjiWBMYiTOmEDhxB8t806Ok9Iz6AMII8kf+rBJeXL1lW3LgUhejkkRtjAoGBAJ4nZIkLTOf42K0mgyshIcm25rK8H5zZnuA0viC6cbdkimqc67w/SqvwKe+5BbNjqnnL8vPJZlduYbY4cs+/TZH15KsR+UT8keqp43pC8g3dme+4voHX8QneiBcthzWumU0VKwrE9wig8AnjAMCp4dBkIcoXoGED+B2lTRVFoyKZAoGAAsGbK8dvSScJ5NxiYNh2NM1amw60ofYe/a/N6KYD5r8ALfOI+jk2oflihZ+Er//ab0cUbokPrXoRjcvpWWkrKwPWfEhRKlYva/A8TMlpmHdt9SMU9blrlCmdck159Vjqr4TnrXn1YMf9GnEbiMxYTCpLEdReAVK1NTDHhpI4FY8=' | base64 -d > out/key.pk8
+          echo 'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURVVENDQWptZ0F3SUJBZ0lVVmQ1RS9ZbFBtQ2VobUVmdE9wUUhBc1h6dWVRd0RRWUpLb1pJaHZjTkFRRUwKQlFBd056RVdNQlFHQTFVRUF3d05RVzVrY205cFpDQkVaV0oxWnpFUU1BNEdBMVVFQ2d3SFFXNWtjbTlwWkRFTApNQWtHQTFVRUJoTUNWVk13SUJjTk1qWXhNREk0TURFek5UVXpXaGdQTWpBMU5EQXpNVFV3TVRNMU5UTmFNRGN4CkZqQVVCZ05WQkFNTURVRnVaSEp2YVdRZ1JHVmlkV2N4RURBT0JnTlZCQW9NQjBGdVpISnZhV1F4Q3pBSkJnTlYKQkFZVEFsVlRNSUlCSWpBTkJna3Foa2lHOXcwQkFRRUZBQU9DQVE4QU1JSUJDZ0tDQVFFQXFRaERybCtMUnZRbQp2Z2U4K0JBSElDVXkrTDJNeW5ET01GZXA2VzN3em5Mb0M5RlIrVWhWY0YvWE5yaWpBdEg1czQxSFVsZnY2bTAxCk9JTUF1d2JXWk81dU45ZFVKU3N6TENkSXB5K0VkUXd5T1F0QXVYT3ZUTEZXN3BjYmdXWGxHbUJMazhybm5nL0kKY2Y0QTJIaEg0KzR6a0xIQlR5V0NpTTh6QjE3ck5veFZ6Um5WRm1ta281RDliUHJnWXpDeE9iNFdrK0JSd1ZUQgozTkJraSt0Z3V2SUczV0M0YmsrUTBLSnowR2cvUU5aUTUrQ0cwUEhLMmhiMUxFUTlMeXMzOHpzUTQvM3FhU2tPCmxkZE5LOGlsc3htcTBLWjcwdHJUZ21RQnRKL1NmbE42TkxGRElPa1JvaEpBckF5L1E1d2tYa1crdjF6S1hZckQKTGRIYWlKUEpGUUlEQVFBQm8xTXdVVEFkQmdOVkhRNEVGZ1FVVVJmTmlZVmhsbEF2V1ZCREJFRFAxaCs0MHVndwpId1lEVlIwakJCZ3dGb0FVVVJmTmlZVmhsbEF2V1ZCREJFRFAxaCs0MHVnd0R3WURWUjBUQVFIL0JBVXdBd0VCCi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQ0FRRUFhY1ZLYmVRbDIxanp4ZnNpWGM3akZsSllQeWFwM3ROSkk3eG4KM2dTNy9SSUJCWlRRekJScnkwYm5VaU9QRHoxeW55VWZvYUV4MmVVQzRaTVN6L0ljL3p2TkoxWFc1L1pUYXU2bQpBNTRINDMvU0lOVUFoU2N3bVJrd1RBQVQ2UkNGa3gyemRvWlpteVVQbUZ5aUpFaUkvZ2hwREE5T3Izc0VSRExZCkh3NFgyNXpaZVBTZjRkOTFURzl5MkpyVWozZkxja3JsT0U5aURJeEtGU2tGdmg1Ni9HekRuelM0amxtZWFkNFgKcVZvNDdvSXlKd0VXZTU3aFlVdnVPUjIrM0QyYk52RDVTV2IxVnJ3RkdxTDNFZXhYclBSNXB0ek5UVnFGZjd1aApvU0NWU2pUZUtRd3FwNmk2aHZPTkpnQjQ2SVR4dWFyUkRKTEFBNGFhc0l3L2NnYmg3Zz09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K' | base64 -d > out/cert.pem
+
+          "$BT/apksigner" sign \
+            --key out/key.pk8 --cert out/cert.pem \
+            --out dafeiyu.apk out/app-aligned.apk
+
+          ls -lh dafeiyu.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dafeiyu-apk
+          path: dafeiyu.apk
