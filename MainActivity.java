@@ -5,10 +5,10 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
-import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.ValueCallback;
 import android.webkit.WebViewClient;
 
 import org.json.JSONObject;
@@ -45,20 +45,22 @@ public class MainActivity extends Activity {
             @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
                                              FileChooserParams params) {
-                if (filePathCallback != null) {
-                    filePathCallback.onReceiveValue(null);
-                }
-                filePathCallback = cb;
+                if (webFileCb != null) { webFileCb.onReceiveValue(null); }
+                webFileCb = cb;
+                Intent it;
                 try {
-                    Intent i = new Intent(Intent.ACTION_GET_CONTENT);
-                    i.addCategory(Intent.CATEGORY_OPENABLE);
-                    i.setType("image/*");
-                    startActivityForResult(Intent.createChooser(i, "选张图"), REQ_FILE);
-                    return true;
+                    it = params != null ? params.createIntent() : new Intent(Intent.ACTION_GET_CONTENT);
                 } catch (Exception e) {
-                    filePathCallback = null;
+                    it = new Intent(Intent.ACTION_GET_CONTENT);
+                }
+                it.addCategory(Intent.CATEGORY_OPENABLE);
+                try {
+                    startActivityForResult(Intent.createChooser(it, "选张图"), REQ_WEB_PICK);
+                } catch (Exception e) {
+                    webFileCb = null;
                     return false;
                 }
+                return true;
             }
         });
         web.addJavascriptInterface(new Bridge(), "AndroidApp");
@@ -68,28 +70,12 @@ public class MainActivity extends Activity {
         new Thread(this::tryLoadRemote).start();
     }
 
-    private ValueCallback<Uri[]> filePathCallback;
-    private static final int REQ_FILE = 1001;
-
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        if (req == REQ_FILE) {
-            if (filePathCallback == null) return;
-            Uri[] out = null;
-            if (res == Activity.RESULT_OK && data != null && data.getData() != null) {
-                out = new Uri[]{data.getData()};
-            }
-            filePathCallback.onReceiveValue(out);
-            filePathCallback = null;
-            return;
-        }
-        super.onActivityResult(req, res, data);
-    }
-
     /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
-    private static final String REMOTE_INDEX =
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html";
-    private static final String CACHE_FILE = "remote_index_v2.html";
+    private static final String[] REMOTE_INDEX = {
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html"
+    };
+    private static final String CACHE_FILE = "remote_index.html";
 
     private void loadLocal() {
         String cached = readCache();
@@ -115,45 +101,163 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static final String[] REMOTE_INDEXES = {
-            /* 主源：raw + 时间戳绕 CDN；备源走镜像，防 raw 被墙 */
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
-            "https://ghproxy.net/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
-            "https://gh-proxy.com/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html"
-    };
-
     private void tryLoadRemote() {
-        String cached = readCache();
-        for (String base : REMOTE_INDEXES) {
-            HttpURLConnection c = null;
-            try {
-                String u = base + (base.contains("?") ? "&" : "?") + "t=" + System.currentTimeMillis();
-                c = (HttpURLConnection) new URL(u).openConnection();
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(12000);
-                c.setRequestProperty("Cache-Control", "no-cache, no-store");
-                c.setRequestProperty("Pragma", "no-cache");
-                c.setRequestProperty("User-Agent", "DaFeiYu-App/1.2");
-                if (c.getResponseCode() != 200) continue;
-                final String html = readAllBytes(c.getInputStream());
-                if (!looksLikeApp(html)) continue;
-                if (html.equals(cached)) return;   /* 已经是最新，不用重载 */
-                try (java.io.FileOutputStream fo =
-                             new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
-                    fo.write(html.getBytes("UTF-8"));
-                }
-                runOnUiThread(() -> {
-                    if (web != null) {
-                        web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
-                    }
-                });
-                return;
-            } catch (Exception ignored) {
-                /* 这个源不行，换下一个 */
-            } finally {
-                if (c != null) c.disconnect();
-            }
+        for (String remote : REMOTE_INDEX) {
+            if (tryOneRemote(remote)) return;
         }
+    }
+
+    private boolean tryOneRemote(String remote) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(remote).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(12000);
+            c.setRequestProperty("Cache-Control", "no-cache");
+            if (c.getResponseCode() != 200) return false;
+            final String html = readAllBytes(c.getInputStream());
+            if (!looksLikeApp(html)) return false;
+            if (html.equals(readCache())) return true;
+            try (java.io.FileOutputStream fo =
+                         new java.io.FileOutputStream(new java.io.File(getFilesDir(), CACHE_FILE))) {
+                fo.write(html.getBytes("UTF-8"));
+            }
+            runOnUiThread(() -> {
+                if (web != null) {
+                    web.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
+                }
+            });
+            return true;
+        } catch (Exception ignored) {
+            /* 网络不行就继续用本地的 */
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /* ---------- 选图上传 ---------- */
+
+    private static final int REQ_PICK_IMAGE = 1001;
+    private static final int REQ_WEB_PICK = 1002;
+    private ValueCallback<Uri[]> webFileCb;
+
+    private String imgId, imgUrl, imgKey;
+
+    private void startPickImage(String id, String url, String key) {
+        imgId = id;
+        imgUrl = url;
+        imgKey = key;
+        try {
+            Intent it = new Intent(Intent.ACTION_GET_CONTENT);
+            it.setType("image/*");
+            it.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(it, "选张图"), REQ_PICK_IMAGE);
+        } catch (Exception e) {
+            emitImage(id, false, "打不开选图", "");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == REQ_WEB_PICK) {
+            ValueCallback<Uri[]> cb = webFileCb;
+            webFileCb = null;
+            if (cb == null) return;
+            Uri[] out = null;
+            if (res == RESULT_OK && data != null) {
+                if (data.getData() != null) {
+                    out = new Uri[]{ data.getData() };
+                } else if (data.getClipData() != null) {
+                    int n = data.getClipData().getItemCount();
+                    out = new Uri[n];
+                    for (int i = 0; i < n; i++) {
+                        out[i] = data.getClipData().getItemAt(i).getUri();
+                    }
+                }
+            }
+            cb.onReceiveValue(out);
+            return;
+        }
+        if (req != REQ_PICK_IMAGE) return;
+        final String id = imgId, url = imgUrl, key = imgKey;
+        if (res != RESULT_OK || data == null || data.getData() == null) {
+            emitImage(id, false, "没选", "");
+            return;
+        }
+        final Uri uri = data.getData();
+        new Thread(() -> uploadImage(id, url, key, uri)).start();
+    }
+
+    private void uploadImage(String id, String url, String key, Uri uri) {
+        HttpURLConnection c = null;
+        InputStream in = null;
+        try {
+            String type = getContentResolver().getType(uri);
+            if (type == null || !type.startsWith("image")) type = "image/jpeg";
+            String ext = type.contains("png") ? ".png" : type.contains("gif") ? ".gif"
+                    : type.contains("webp") ? ".webp" : ".jpg";
+            String name = "img" + System.currentTimeMillis() + ext;
+
+            String boundary = "----fish" + System.currentTimeMillis();
+            String head = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\n"
+                    + "Content-Type: " + type + "\r\n\r\n";
+            String tail = "\r\n--" + boundary + "--\r\n";
+
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("POST");
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(120000);
+            c.setRequestProperty("Authorization", "Bearer " + key);
+            c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            c.setDoOutput(true);
+            c.setChunkedStreamingMode(8192);
+
+            in = getContentResolver().openInputStream(uri);
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(head.getBytes("UTF-8"));
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                os.write(tail.getBytes("UTF-8"));
+            }
+
+            int code = c.getResponseCode();
+            String body = readAllBytes(code >= 400 ? c.getErrorStream() : c.getInputStream());
+            if (code != 200) {
+                emitImage(id, false, "HTTP " + code + " " + body, "");
+                return;
+            }
+            JSONObject o = new JSONObject(body);
+            JSONObject d = o.optJSONObject("data");
+            String aid = d != null ? d.optString("attachment_id", "") : "";
+            if (aid.isEmpty()) {
+                emitImage(id, false, body, "");
+                return;
+            }
+            String shown = d.optString("filename", name);
+            emitImage(id, true, aid, shown);
+        } catch (Exception e) {
+            emitImage(id, false, e.toString(), "");
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Exception ignored) {
+            }
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private void emitImage(String id, boolean ok, String a, String b) {
+        StringBuilder sb = new StringBuilder("window.__imageResult&&window.__imageResult(");
+        sb.append(JSONObject.quote(id == null ? "" : id)).append(',');
+        sb.append(ok);
+        sb.append(',').append(JSONObject.quote(a == null ? "" : a));
+        sb.append(',').append(JSONObject.quote(b == null ? "" : b));
+        sb.append(");");
+        js(sb.toString());
     }
 
     @Override
@@ -177,18 +281,6 @@ public class MainActivity extends Activity {
 
     private void emitDone(String id, int status, String err) {
         js("window.__done(" + id + "," + status + "," + JSONObject.quote(err == null ? "" : err) + ")");
-    }
-
-    private void emitUploaded(String id, int code, String resp) {
-        js("window.__uploaded(" + id + "," + code + ","
-                + JSONObject.quote(resp == null ? "" : resp) + ")");
-    }
-
-    /* 聊天记录落盘，重启不丢 */
-    private java.io.File histFile(String session) {
-        String name = session == null || session.isEmpty() ? "default"
-                : session.replaceAll("[^A-Za-z0-9_-]", "_");
-        return new java.io.File(getFilesDir(), "hist_" + name + ".json");
     }
 
     private static String readAll(InputStream in) {
@@ -261,71 +353,10 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /**
-         * 上传图片：base64 进来，multipart 发到 /api/v1/files，回 attachment_id。
-         */
+        /** 选图并上传，结果回调 window.__imageResult(id, ok, attachmentId, name)。 */
         @JavascriptInterface
-        public void upload(final String id, final String url, final String key,
-                           final String b64, final String filename) {
-            new Thread(() -> {
-                HttpURLConnection c = null;
-                try {
-                    byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
-                    String boundary = "----fish" + System.currentTimeMillis();
-                    c = (HttpURLConnection) new URL(url).openConnection();
-                    c.setRequestMethod("POST");
-                    c.setConnectTimeout(20000);
-                    c.setReadTimeout(180000);
-                    c.setRequestProperty("Authorization", "Bearer " + key);
-                    c.setRequestProperty("Content-Type",
-                            "multipart/form-data; boundary=" + boundary);
-                    c.setDoOutput(true);
-
-                    String safe = filename == null ? "image.jpg" : filename.replace("\"", "");
-                    String ctype = safe.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
-                    try (OutputStream os = c.getOutputStream()) {
-                        os.write(("--" + boundary + "\r\n"
-                                + "Content-Disposition: form-data; name=\"file\"; filename=\""
-                                + safe + "\"\r\n"
-                                + "Content-Type: " + ctype + "\r\n\r\n").getBytes("UTF-8"));
-                        os.write(data);
-                        os.write(("\r\n--" + boundary + "--\r\n").getBytes("UTF-8"));
-                    }
-
-                    int code = c.getResponseCode();
-                    InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
-                    emitUploaded(id, code, readAllBytes(in));
-                } catch (Exception e) {
-                    emitUploaded(id, 0, e.toString());
-                } finally {
-                    if (c != null) c.disconnect();
-                }
-            }).start();
-        }
-
-        /** 聊天记录存手机文件：window.saveHist(session, json) */
-        @JavascriptInterface
-        public void saveHist(final String session, final String json) {
-            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(histFile(session))) {
-                fo.write((json == null || json.isEmpty() ? "[]" : json).getBytes("UTF-8"));
-            } catch (Exception ignored) {
-            }
-        }
-
-        /** 读回聊天记录，回调 window.__histLoaded(session, json) */
-        @JavascriptInterface
-        public void loadHist(final String session) {
-            new Thread(() -> {
-                String s = "";
-                try {
-                    java.io.File f = histFile(session);
-                    if (f.exists()) s = readAllBytes(new java.io.FileInputStream(f));
-                } catch (Exception ignored) {
-                }
-                js("window.__histLoaded && window.__histLoaded("
-                        + JSONObject.quote(session == null ? "" : session) + ","
-                        + JSONObject.quote(s) + ")");
-            }).start();
+        public void pickImage(final String id, final String url, final String key) {
+            runOnUiThread(() -> startPickImage(id, url, key));
         }
 
         /** 普通 GET，用于自检。 */
