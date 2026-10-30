@@ -258,6 +258,7 @@
   <div class="f">
     <label>图片</label>
     <div class="h">发图会先传到 AstrBot 再一起发。现在这模型看不见画面，只知道有张图。</div>
+    <label class="chk"><input type="checkbox" id="cPickWeb"> 用网页选图（推荐，手机不会闪退）</label>
   </div>
   <div id="log"></div>
   <div class="btns">
@@ -275,7 +276,8 @@
     url: 'http://127.0.0.1:6185/api/v1/chat',
     key: 'abk_u2QiHqqOB5YBu2htdW_eSDMXG90CBWADeo4wLZ7hFkI',
     user: 'youzhan',
-    session: 'fish_app'
+    session: 'fish_app',
+    pickWeb: true
   };
 
   var cfg = load();
@@ -737,8 +739,10 @@
   var pendingImg = null;   /* {b64, data, name} */
 
   document.getElementById('plus').addEventListener('click', function () {
-    /* 老版原生自带选图上传，新版走网页自己的 input file */
-    if (window.AndroidApp && typeof window.AndroidApp.pickImage === 'function') {
+    /* 原生命令走过去容易把手机搞闪退（它把相册原图整个读进内存），
+       所以默认改走网页自己的 input file：先在本地压到 1080 再传。 */
+    var useNative = (cfg.pickWeb === false) && window.AndroidApp && typeof window.AndroidApp.pickImage === 'function';
+    if (useNative) {
       var id = ++seq;
       pending[id] = { bub: null, text: '', said: inp.value.trim(), err: '', aid: '', np: true };
       setDot('', '选图中');
@@ -748,6 +752,14 @@
       return;
     }
     pick.click();
+    setTimeout(function () {
+      try {
+        if (!document.hidden && !(pick.files && pick.files.length)) {
+          log('!! 相册没弹出来的话，去「设置」里把「用网页选图」关掉再点 +');
+          setDot('', '在线');
+        }
+      } catch (e) {}
+    }, 2500);
   });
 
   /* 老版原生的选图回调：__imageResult(id, ok, attachmentId, name) */
@@ -793,7 +805,7 @@
           cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
           return cv.toDataURL('image/jpeg', q);
         };
-        cb(mk(1280, 0.82), mk(360, 0.62));
+        cb(mk(1080, 0.8), mk(360, 0.62));
       };
       im.onerror = function () { cb(null, null); };
       im.src = fr.result;
@@ -936,6 +948,7 @@
     document.getElementById('cKey').value = cfg.key;
     document.getElementById('cUser').value = cfg.user;
     document.getElementById('cSess').value = cfg.session;
+    document.getElementById('cPickWeb').checked = cfg.pickWeb !== false;
     logBox.classList.add('show');
     panel.classList.add('show');
   });
@@ -950,6 +963,7 @@
     cfg.key = document.getElementById('cKey').value.trim();
     cfg.user = document.getElementById('cUser').value.trim() || DEF.user;
     cfg.session = document.getElementById('cSess').value.trim() || DEF.session;
+    cfg.pickWeb = document.getElementById('cPickWeb').checked;
     save();
     panel.classList.remove('show');
     setDot('', '未连接');
@@ -1145,25 +1159,24 @@
 
   // ---------- 列表 ----------
   function loadSessions(silent) {
+    // 「和我说话」永远排在最前，QQ 断线也不影响聊天
+    var ai = { kind: 'ai', id: 'ai', name: '大肥鱼', sub: '和我说话', avatar: '' };
+    sessions = [ai];
+    renderList();
     if (!hasNative) { qst.textContent = '仅 App 可用'; return; }
     qst.textContent = '加载中';
     Promise.all([api('/api/friends'), api('/api/groups'), api('/api/me').catch(function () { return { data: {} }; })])
       .then(function (r) {
         var fs = (r[0] && r[0].data) || [], gs = (r[1] && r[1].data) || [];
         myUid = ((r[2] && r[2].data) || {}).uid || myUid;
-        var ai = { kind: 'ai', id: 'ai', name: '大肥鱼', sub: '和我说话', avatar: '' };
         sessions = [ai]
           .concat(fs.map(function (x) { x.sub = (x.nick && x.nick !== x.name) ? x.nick : '好友'; return x; }))
           .concat(gs.map(function (x) { x.sub = (x.count || 0) + ' 人'; return x; }));
         qst.textContent = fs.length + ' 好友 · ' + gs.length + ' 群';
         renderList();
       })
-      .catch(function (e) {
-        qst.textContent = e.message;
-        if (!silent) sheet('列表没拉到', [
-          { t: e.message, cls: 'bad', fn: function () {} },
-          { t: '重试', fn: function () { loadSessions(); } }
-        ]);
+      .catch(function () {
+        qst.textContent = 'QQ 未连接';
       });
   }
 
