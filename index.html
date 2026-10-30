@@ -32,6 +32,19 @@
   .row.ai .bub{background:#151e26;color:#dbe4ec;border-bottom-left-radius:5px}
   .row.ai .bub:empty::after{content:"…";color:#4a5a68}
   .err{color:#c9737a}
+  .row.ai .col{max-width:84%;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+  .row.ai .col .bub{max-width:100%}
+  .steps{max-width:100%;font-size:12px;line-height:1.6}
+  .steps .hp{display:inline-flex;align-items:center;gap:6px;background:#101922;
+    border:1px solid #17222c;border-radius:9px;padding:4px 10px;font-size:12px;color:#66788a}
+  .steps .hp .cv{font-size:8px;color:#3f4e5c;transition:transform .16s}
+  .steps.open .hp .cv{transform:rotate(90deg)}
+  .steps .bd{display:none;margin:5px 0 0;padding:0 0 0 10px;border-left:1px solid #1e2b36;
+    white-space:pre-wrap;color:#5f7285;max-height:38vh;overflow-y:auto;font-size:12px;
+    -webkit-overflow-scrolling:touch}
+  .steps.open .bd{display:block}
+  .meta{font-size:11px;color:#3f4e5c;letter-spacing:.02em}
+  .meta:empty{display:none}
   .empty{margin:auto;text-align:center;color:#4a5a68;font-size:13px;line-height:2}
 
   footer{flex:0 0 auto;display:flex;gap:9px;align-items:flex-end;
@@ -214,6 +227,29 @@
     return bub;
   }
 
+  /* 一条 AI 回复 = 折叠步骤条 + 正文气泡 + 用量小字 */
+  function addAiTurn() {
+    clearEmpty();
+    var row = document.createElement('div');
+    row.className = 'row ai';
+    var col = document.createElement('div');
+    col.className = 'col';
+    var steps = document.createElement('div');
+    steps.className = 'steps';
+    steps.style.display = 'none';
+    var bub = document.createElement('div');
+    bub.className = 'bub';
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    col.appendChild(steps);
+    col.appendChild(bub);
+    col.appendChild(meta);
+    row.appendChild(col);
+    msgs.appendChild(row);
+    scroll();
+    return { bub: bub, steps: steps, meta: meta };
+  }
+
   /* --- 聊天记录：按 session 存在本地 --- */
   var hist = [];
   var HKEY = 'fish_hist_' + cfg.session;
@@ -279,7 +315,10 @@
     if (e) e.remove();
     for (var i = 0; i < hist.length; i++) {
       var r = hist[i] || {};
-      addRow(r.who === 'me' ? 'me' : 'ai', r.text || '', r.img || '');
+      if (r.who === 'me') { addRow('me', r.text || '', r.img || ''); continue; }
+      var t = addAiTurn();
+      applySplit(t, r.text || '');
+      if (r.meta) t.meta.textContent = r.meta;
     }
     scroll();
   }
@@ -319,6 +358,92 @@
     for (var i = 0; i < lines.length; i++) onChunkLine(st, lines[i]);
   };
 
+  /* 增量拼接：全量覆盖 / 重复回滚 / 纯增量三种都兜住 */
+  function mergeDelta(cur, txt) {
+    cur = cur || '';
+    if (!txt) return cur;
+    if (txt.indexOf(cur) === 0) return txt;
+    if (cur && cur.indexOf(txt) === 0) return cur;
+    if (cur && txt.length > 8 && cur.slice(-txt.length) === txt) return cur;
+    return cur + txt;
+  }
+
+  /* 正文按空行拆成多条气泡——像 QQ 那样一句一条 */
+  function applySplit(st, text) {
+    var col = st && st.bub ? st.bub.parentNode : null;
+    if (!col) return;
+    var old = col.querySelectorAll('.bub.extra');
+    for (var k = 0; k < old.length; k++) col.removeChild(old[k]);
+    var raw = String(text == null ? '' : text);
+    var list = raw.split(/\n{2,}/);
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i].replace(/^\s+|\s+$/g, '');
+      if (t) out.push(t);
+    }
+    if (!out.length) { st.bub.textContent = ''; return; }
+    st.bub.textContent = out[0];
+    var prev = st.bub;
+    for (var j = 1; j < out.length; j++) {
+      var b = document.createElement('div');
+      b.className = 'bub extra';
+      b.textContent = out[j];
+      col.insertBefore(b, prev.nextSibling);
+      prev = b;
+    }
+  }
+
+
+  function toolNameOf(s) {
+    try {
+      var o = JSON.parse(s);
+      if (o && typeof o === 'object') {
+        if (o.name) return String(o.name);
+        if (o.function && o.function.name) return String(o.function.name);
+      }
+    } catch (e) {}
+    var m = /"name"\s*:\s*"([^"]+)"/.exec(String(s));
+    return m ? m[1] : '';
+  }
+
+  /* 折叠步骤条：思考 N 次 · 用了 M 次工具 */
+  function paintSteps(st) {
+    st.pq = 0;
+    if (!st.steps || (!st.thinkN && !st.tools.length)) return;
+    st.steps.style.display = '';
+    if (!st.hp) {
+      st.hp = document.createElement('div');
+      st.hp.className = 'hp';
+      var cv = document.createElement('span');
+      cv.className = 'cv';
+      cv.textContent = '▶';
+      var tt = document.createElement('span');
+      tt.className = 'tt';
+      st.hp.appendChild(cv);
+      st.hp.appendChild(tt);
+      st.hp.addEventListener('click', function () { st.steps.classList.toggle('open'); });
+      st.steps.appendChild(st.hp);
+      st.bd = document.createElement('div');
+      st.bd.className = 'bd';
+      st.steps.appendChild(st.bd);
+    }
+    var bits = [];
+    if (st.thinkN) bits.push('思考 ' + st.thinkN + ' 次');
+    if (st.tools.length) bits.push('用了 ' + st.tools.length + ' 次工具');
+    st.hp.querySelector('.tt').textContent = bits.join(' · ') + (st.done ? '' : ' ···');
+    var body = st.rtext || '';
+    if (st.tools.length) body += (body ? '\n\n' : '') + st.tools.join('\n');
+    if (st.bd.textContent !== body) st.bd.textContent = body;
+    if (st.steps.classList.contains('open')) st.bd.scrollTop = st.bd.scrollHeight;
+    if (atBottom()) scroll();
+  }
+
+  function queuePaint(st) {
+    if (st.pq) return;
+    st.pq = 1;
+    setTimeout(function () { paintSteps(st); }, 90);
+  }
+
   function onChunkLine(st, line) {
     if (!line) return;
 
@@ -327,6 +452,7 @@
     else if (/^\s*[[{]/.test(line)) raw = line.trim();   /* 非 SSE 的裸 JSON，多半是错误 */
     else return;
     if (!raw || raw === '[DONE]') return;
+    if (raw === '[HB]' || raw === ':' || raw.indexOf(':') === 0) return;
 
     var o;
     try { o = JSON.parse(raw); } catch (e) { return; }
@@ -340,21 +466,53 @@
       return;
     }
 
-    /* 思考过程不算正文，丢掉 */
+    /* 用量：整轮结束才推一次 */
+    if (o.type === 'agent_stats') {
+      if (o.data && typeof o.data === 'object') st.stats = o.data;
+      return;
+    }
+
+    var piece = '';
+    if (typeof o.data === 'string') piece = o.data;
+    else if (o.data && typeof o.data === 'object') {
+      piece = (typeof o.data.text === 'string' && o.data.text) ||
+              (typeof o.data.content === 'string' && o.data.content) || '';
+    }
+
+    var kind = o.chain_type || o.type || '';
+    if (kind !== st.lastKind) {
+      if (kind === 'reasoning') st.thinkN = (st.thinkN | 0) + 1;
+      st.lastKind = kind;
+    }
+
+    /* 思考过程：实时往折叠条里追加 */
     if (o.chain_type === 'reasoning') {
+      if (piece) {
+        if (!st.rfirst) { st.rfirst = 1; st.steps.classList.add('open'); }
+        st.rtext = mergeDelta(st.rtext, piece);
+        if (st.rtext.length > 40000) st.rtext = st.rtext.slice(-40000);
+        queuePaint(st);
+      }
       setDot('', '想事情');
       return;
     }
 
-    /* 只认正文类事件；工具调用、统计、状态这些一概不显示 */
+    /* 工具调用：只记名字和次数，不把参数糊到界面上 */
+    if (o.chain_type === 'tool_call') {
+      var nm = toolNameOf(piece || raw);
+      if (!st.tools.length || st.tools[st.tools.length - 1] !== '· ' + (nm || '工具')) {
+        st.tools.push('· ' + (nm || '工具'));
+      }
+      st.brk = 1;
+      queuePaint(st);
+      return;
+    }
+    if (o.chain_type === 'tool_call_result') { st.brk = 1; return; }
+
+    /* 只认正文类事件；状态、快照这些不显示 */
     if (o.type && ['plain', 'text', 'image', 'record', 'end'].indexOf(o.type) < 0) return;
 
-    var txt = '';
-    if (typeof o.data === 'string') txt = o.data;
-    else if (o.data && typeof o.data === 'object') {
-      txt = (typeof o.data.text === 'string' && o.data.text) ||
-            (typeof o.data.content === 'string' && o.data.content) || '';
-    }
+    var txt = piece;
     if (!txt && o.choices && o.choices[0] && o.choices[0].delta) {
       txt = o.choices[0].delta.content || '';
     }
@@ -363,21 +521,58 @@
     /* 兜底：漏出来的工具调用 / 内部 JSON 不往界面上怼 */
     if (/^\s*\{\s*"(id|name|args|arguments|tool_calls|ts)"/.test(txt)) return;
 
-    /* 累加式 vs 全量式，俩都兜住；重复回滚的不重复画 */
-    if (txt.indexOf(st.text) === 0) st.text = txt;
-    else if (st.text && st.text.indexOf(txt) === 0) { return; }
-    else if (st.text && txt.length > 8 && st.text.slice(-txt.length) === txt) { return; }
-    else st.text += txt;
+    /* 隔了工具调用，新一段正文另起一段，别糊成一坨 */
+    if (st.brk) {
+      st.brk = 0;
+      if (!(st.text && txt.indexOf(st.text) === 0) && txt.charAt(0) !== '\n') {
+        txt = '\n\n' + txt;
+      }
+    }
 
+    st.text = mergeDelta(st.text, txt);
     if (!st.mounted) { st.mounted = true; }
     st.bub.textContent = st.text;
+    setDot('', '说话中');
     if (atBottom()) scroll();
   };
+
+  function fmtN(n) {
+    n = n | 0;
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  /* 一轮结束：步骤条定格收起，底部写上这轮吃了多少 token */
+  function finishTurn(st) {
+    st.done = 1;
+    if (st.bub && st.text) applySplit(st, st.text);
+    if (st.steps) {
+      st.steps.classList.remove('open');
+      paintSteps(st);
+    }
+    if (!st.meta) return;
+    var s = st.stats || {};
+    var u = s.token_usage || {};
+    var inTok = (u.input_other | 0) + (u.input_cached | 0);
+    var outTok = u.output | 0;
+    var tot = inTok + outTok;
+    var bits = [];
+    if (tot) {
+      bits.push('↑' + fmtN(inTok) + ' ↓' + fmtN(outTok) + ' · 共 ' + fmtN(tot) + ' token');
+    }
+    var dur = (s.end_time && s.start_time) ? (s.end_time - s.start_time) : 0;
+    if (dur > 0) bits.push(dur.toFixed(1) + 's');
+    if (s.time_to_first_token > 0) {
+      bits.push('首字 ' + Number(s.time_to_first_token).toFixed(1) + 's');
+    }
+    st.meta.textContent = bits.join(' · ');
+  }
 
   window.__done = function (id, code, err) {
     var st = pending[id];
     if (!st) return;
     delete pending[id];
+    if (st.kind === 'pull') { handlePull(code, err); return; }
+    finishTurn(st);
     log('> status ' + code + (err ? ' ' + String(err).slice(0, 400) : ''));
     if (code === 200) {
       if (!st.text) {
@@ -385,11 +580,14 @@
           setDot('err', '出错');
         } else {
           setDot('on', '在线');
-          st.bub.textContent = '（没说话）';
+          st.bub.textContent = st.thinkN ? '（想了想，没说）' : '（没说话）';
         }
       } else {
         setDot('on', '在线');
-        pushHist({ who: 'ai', text: st.text, img: '' });
+        pushHist({
+          who: 'ai', text: st.text, img: '',
+          meta: st.meta ? st.meta.textContent : ''
+        });
       }
     } else if (code === 0) {
       setDot('err', '连不上');
@@ -575,8 +773,12 @@
     sendBtn.disabled = true;
 
     var id = ++seq;
-    var bub = addRow('ai', '');
-    pending[id] = { bub: bub, text: '', said: text, err: '', aid: '' };
+    var turn = addAiTurn();
+    pending[id] = {
+      bub: turn.bub, steps: turn.steps, meta: turn.meta,
+      text: '', said: text, err: '', aid: '',
+      rtext: '', tools: [], thinkN: 0
+    };
 
     if (pic) {
       clearPick();
@@ -668,6 +870,85 @@
   if (window.AndroidApp && window.AndroidApp.loadHist) {
     try { window.AndroidApp.loadHist(cfg.session); } catch (e) {}
   }
+
+  /* --- 主动消息：每 5 秒问一次 6186，有新东西就摆上来 --- */
+  var PUSH = {
+    base: 'http://127.0.0.1:6186',
+    token: 'fishpush_7Kq2mZ'
+  };
+  var pushTs = 0;
+  var pushBusy = false;
+  var pushN = 0;
+  try { pushTs = parseFloat(localStorage.getItem('fish_pushts') || '0') || 0; } catch (e) {}
+
+  var pushT = 0;
+
+  function pullOnce() {
+    if (pushBusy) return;
+    if (!(window.AndroidApp && window.AndroidApp.get)) return;
+    pushBusy = true;
+    /* id 必须是数字：原生回调拼的是 __done(-1,...)，给字符串会变成未定义变量 */
+    var id = --pushN;
+    pending[id] = { kind: 'pull' };
+    native('get', [id, PUSH.base + '/pull?since=' + pushTs + '&token=' + PUSH.token, '']);
+    clearTimeout(pushT);
+    pushT = setTimeout(function () { pushBusy = false; }, 15000);
+  }
+
+  function handlePull(code, body) {
+    pushBusy = false;
+    clearTimeout(pushT);
+    if (code !== 200) return;
+    var list = [], now = 0;
+    try {
+      var o = JSON.parse(body);
+      now = o.now || 0;
+      list = Array.isArray(o.msgs) ? o.msgs : [];
+    } catch (e) { return; }
+    if (list.length > 10) list = list.slice(-10);
+    var maxTs = pushTs, i, m, t, u;
+    for (i = 0; i < list.length; i++) {
+      m = list[i] || {};
+      t = m.ts || 0;
+      if (t > maxTs) maxTs = t;
+      if ((m.type || 'text') === 'file' && (m.url || m.id)) {
+        u = m.url || ('/file/' + m.id);
+        if (!/^https?:/.test(u)) u = PUSH.base + u;
+        if (!/[?&]token=/.test(u)) u += (u.indexOf('?') < 0 ? '?' : '&') + 'token=' + PUSH.token;
+        if (/\.(png|jpe?g|gif|webp|bmp)([?#]|$)/i.test(m.name || u)) {
+          addRow('ai', '', u);
+          pushHist({ who: 'ai', text: '', img: u });
+        } else {
+          var txt = (m.name || '附件') + '\n' + u;
+          addRow('ai', '［文件］' + txt, '');
+          pushHist({ who: 'ai', text: '［文件］' + txt, img: '' });
+        }
+      } else if (m.text) {
+        addRow('ai', m.text, '');
+        pushHist({ who: 'ai', text: m.text, img: '' });
+      }
+    }
+    if (maxTs > pushTs) {
+      pushTs = maxTs;
+      try { localStorage.setItem('fish_pushts', String(pushTs)); } catch (e) {}
+    }
+    if (!list.length) return;
+    if (atBottom()) scroll();
+    flashDot();
+  }
+
+  var flashT = 0;
+  function flashDot() {
+    if (panel && panel.classList.contains('show')) return;
+    setDot('on', '有新消息');
+    clearTimeout(flashT);
+    flashT = setTimeout(function () { setDot('on', '在线'); }, 6000);
+  }
+
+  (function loopPush() {
+    pullOnce();
+    setTimeout(loopPush, 5000);
+  })();
 
   setTimeout(ping, 600);
 })();
