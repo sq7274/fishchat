@@ -2,6 +2,8 @@ package com.dafeiyu.chat;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
@@ -169,8 +171,10 @@ public class MainActivity extends Activity {
 
     /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
     private static final String[] REMOTE_INDEX = {
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
-            "https://raw.githubusercontent.com/sq7274/fishchat/main/assets/index.html"
+            "https://ghproxy.net/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://gh-proxy.com/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
+            "https://cdn.jsdelivr.net/gh/sq7274/fishchat@main/index.html",
+            "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html"
     };
     private static final String CACHE_FILE = "remote_index.html";
 
@@ -303,21 +307,51 @@ public class MainActivity extends Activity {
         new Thread(() -> uploadImage(id, url, key, uri)).start();
     }
 
+    /* 把相册原图先压到长边 1080 再传。
+       以前直接把原图流式往外扔，两个毛病：
+       ① chunked 上传，服务器要 Content-Length，回 411；
+       ② 几兆的原图整个过内存，App 被系统杀掉（选完图直接闪退）。 */
+    private byte[] shrinkToJpeg(Uri uri) {
+        try {
+            BitmapFactory.Options probe = new BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            InputStream p1 = getContentResolver().openInputStream(uri);
+            BitmapFactory.decodeStream(p1, null, probe);
+            if (p1 != null) p1.close();
+            int scale = 1;
+            int maxSide = Math.max(probe.outWidth, probe.outHeight);
+            while (maxSide / scale > 1080) scale *= 2;
+
+            BitmapFactory.Options opt = new BitmapFactory.Options();
+            opt.inSampleSize = scale;
+            InputStream p2 = getContentResolver().openInputStream(uri);
+            Bitmap bm = BitmapFactory.decodeStream(p2, null, opt);
+            if (p2 != null) p2.close();
+            if (bm == null) return null;
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            bm.compress(Bitmap.CompressFormat.JPEG, 85, bo);
+            bm.recycle();
+            return bo.toByteArray();
+        } catch (Throwable t) {
+            writeLog("IMG", "压缩失败 " + t);
+            return null;
+        }
+    }
+
     private void uploadImage(String id, String url, String key, Uri uri) {
         HttpURLConnection c = null;
-        InputStream in = null;
         try {
-            String type = getContentResolver().getType(uri);
-            if (type == null || !type.startsWith("image")) type = "image/jpeg";
-            String ext = type.contains("png") ? ".png" : type.contains("gif") ? ".gif"
-                    : type.contains("webp") ? ".webp" : ".jpg";
-            String name = "img" + System.currentTimeMillis() + ext;
-
+            byte[] raw = shrinkToJpeg(uri);
+            if (raw == null || raw.length == 0) {
+                emitImage(id, false, "图片读不出来", "");
+                return;
+            }
+            String name = "img" + System.currentTimeMillis() + ".jpg";
             String boundary = "----fish" + System.currentTimeMillis();
-            String head = "--" + boundary + "\r\n"
+            byte[] hb = ("--" + boundary + "\r\n"
                     + "Content-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\n"
-                    + "Content-Type: " + type + "\r\n\r\n";
-            String tail = "\r\n--" + boundary + "--\r\n";
+                    + "Content-Type: image/jpeg\r\n\r\n").getBytes("UTF-8");
+            byte[] tb = ("\r\n--" + boundary + "--\r\n").getBytes("UTF-8");
 
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setRequestMethod("POST");
@@ -326,16 +360,14 @@ public class MainActivity extends Activity {
             c.setRequestProperty("Authorization", "Bearer " + key);
             c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
             c.setDoOutput(true);
-            c.setChunkedStreamingMode(8192);
-            writeLog("IMG", "上传 " + type + " " + url);
+            /* 关键：给出确定的长度，别再 chunked */
+            c.setFixedLengthStreamingMode(hb.length + raw.length + tb.length);
+            writeLog("IMG", "上传 " + (raw.length / 1024) + "KB -> " + url);
 
-            in = getContentResolver().openInputStream(uri);
             try (OutputStream os = c.getOutputStream()) {
-                os.write(head.getBytes("UTF-8"));
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
-                os.write(tail.getBytes("UTF-8"));
+                os.write(hb);
+                os.write(raw);
+                os.write(tb);
             }
 
             int code = c.getResponseCode();
@@ -353,17 +385,13 @@ public class MainActivity extends Activity {
                 emitImage(id, false, body, "");
                 return;
             }
-            String shown = d.optString("filename", name);
+            String shown = d != null ? d.optString("filename", name) : name;
             writeLog("IMG", "上传成功 " + aid);
             emitImage(id, true, aid, shown);
         } catch (Exception e) {
             writeLog("IMG", "上传异常 " + e);
             emitImage(id, false, e.toString(), "");
         } finally {
-            try {
-                if (in != null) in.close();
-            } catch (Exception ignored) {
-            }
             if (c != null) c.disconnect();
         }
     }
