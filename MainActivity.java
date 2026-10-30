@@ -262,11 +262,20 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (web != null && web.canGoBack()) {
-            web.goBack();
-        } else {
-            super.onBackPressed();
+        if (web != null) {
+            // 先问页面：能退一层就退一层，退不动才算退出 App
+            web.evaluateJavascript("(window.__back && window.__back()) || false", value -> {
+                if (!"true".equals(value)) {
+                    if (web.canGoBack()) {
+                        web.goBack();
+                    } else {
+                        MainActivity.super.onBackPressed();
+                    }
+                }
+            });
+            return;
         }
+        super.onBackPressed();
     }
 
     private void js(String code) {
@@ -370,6 +379,35 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(10000);
                     c.setReadTimeout(30000);
                     c.setRequestProperty("Authorization", "Bearer " + key);
+                    int code = c.getResponseCode();
+                    InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                    emitDone(id, code, readAllBytes(in));
+                } catch (Exception e) {
+                    emitDone(id, 0, e.toString());
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }).start();
+        }
+
+        /** 普通 POST（JSON 体），回 window.__done(id, code, body) */
+        @JavascriptInterface
+        public void post(final String id, final String url, final String key, final String body) {
+            new Thread(() -> {
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setConnectTimeout(12000);
+                    c.setReadTimeout(40000);
+                    c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    if (key != null && !key.isEmpty()) {
+                        c.setRequestProperty("Authorization", "Bearer " + key);
+                    }
+                    c.setDoOutput(true);
+                    try (OutputStream os = c.getOutputStream()) {
+                        os.write((body == null ? "" : body).getBytes("UTF-8"));
+                    }
                     int code = c.getResponseCode();
                     InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
                     emitDone(id, code, readAllBytes(in));
