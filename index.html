@@ -207,7 +207,7 @@
   /* 底部两个页面：鱼 / QQ */
   #app,#list{height:calc(100% - 54px)}
   #tabbar{position:fixed;left:0;right:0;bottom:0;height:54px;display:flex;
-    background:#0e161c;border-top:1px solid #17222c;z-index:30}
+    background:#0e161c;border-top:1px solid #17222c;z-index:9000}
   #tabbar.hide{display:none}
   #tabbar button{flex:1;background:none;border:none;color:#5e707e;font-size:12.5px;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
@@ -1076,23 +1076,43 @@
   try { pushTs = parseFloat(localStorage.getItem('fish_pushts') || '0') || 0; } catch (e) {}
 
   var pushT = 0;
+  var pushFail = 0, pushLast = '还没拉过';
 
   function pullOnce() {
     if (pushBusy) return;
-    if (!(window.AndroidApp && window.AndroidApp.get)) return;
+    if (!(window.AndroidApp && window.AndroidApp.get)) { pushLast = '没有原生桥（浏览器里？）'; return; }
     pushBusy = true;
     /* id 必须是数字：原生回调拼的是 __done(-1,...)，给字符串会变成未定义变量 */
     var id = --pushN;
     pending[id] = { kind: 'pull' };
-    native('get', [id, PUSH.base + '/pull?since=' + pushTs + '&token=' + PUSH.token, '']);
+    try {
+      if (!native('get', [String(id), PUSH.base + '/pull?since=' + pushTs + '&token=' + PUSH.token, ''])) {
+        delete pending[id]; pushBusy = false; pushLast = '没有原生桥 get'; return;
+      }
+    } catch (e) {
+      delete pending[id]; pushBusy = false; pushLast = 'get 抛错 ' + e; return;
+    }
     clearTimeout(pushT);
-    pushT = setTimeout(function () { pushBusy = false; }, 15000);
+    pushT = setTimeout(function () {
+      if (pending[id]) delete pending[id];
+      pushBusy = false;
+      pushFail++;
+      pushLast = '超时没回（15s）';
+      if (pushFail >= 3) setDot('err', '推送不通');
+    }, 15000);
   }
 
   function handlePull(code, body) {
     pushBusy = false;
     clearTimeout(pushT);
-    if (code !== 200) return;
+    if (code !== 200) {
+      pushFail++;
+      pushLast = '拉取失败 code=' + code + ' ' + String(body || '').slice(0, 60);
+      if (pushFail >= 3) setDot('err', '推送不通');
+      return;
+    }
+    pushFail = 0;
+    pushLast = 'ok since=' + pushTs;
     var list = [], now = 0;
     try {
       var o = JSON.parse(body);
@@ -1853,8 +1873,8 @@
       };
       var url = QQ.base + path + (path.indexOf('?') < 0 ? '?' : '&') + 'token=' + QQ.token;
       try {
-        if (opt.body) AndroidApp.post(id, url, '', opt.body);
-        else AndroidApp.get(id, url, '');
+        if (opt.body) AndroidApp.post(String(id), url, '', opt.body);
+        else AndroidApp.get(String(id), url, '');
       } catch (e) { clearTimeout(timer); delete cbs[id]; rej(e); }
     });
   }
@@ -2326,6 +2346,22 @@
     if (!appV.classList.contains('hide')) { return false; }
     return false;
   };
+
+  /* 底部 tab 加固：委托到 document 捕获阶段，别处报错也不影响切换 */
+  function goTab(k) {
+    if (k === 'app') { if (cur) { cur = null; qlist = []; replyTo = null; } show('app'); return; }
+    show('list');
+    loadSessions(qqAsked || qqQuiet);
+    qqAsked = true;
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target, n = 0;
+    while (t && t !== document && n < 6) {
+      if (t.id === 'tabFish') { goTab('app'); return; }
+      if (t.id === 'tabQQ') { goTab('list'); return; }
+      t = t.parentNode; n++;
+    }
+  }, true);
 
   // 没原生桥（网页端）就保持原来的单聊界面
   var qqAsked = false;
