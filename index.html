@@ -174,6 +174,36 @@
   .opt:active{background:#0e1720}
   .opt.bad{color:#c9737a}
   .opt.quiet{color:#4a5a68;font-size:12px;text-align:center;border:none}
+
+  /* ---------- 增强层 ---------- */
+  :root{--fzfs:14.5px}
+  .qm .tx2{font-size:var(--fzfs)}
+  .tsep{text-align:center;font-size:10.5px;color:#4a5a68;margin:6px 0 2px}
+  .it .tm{font-size:10px;color:#455561;flex:0 0 auto;margin-left:6px}
+  .it .dot{width:7px;height:7px;border-radius:50%;background:#4fb8e0;flex:0 0 auto}
+  .it .mr{font-size:10px;color:#3f4f5b;border:1px solid #1e2b36;border-radius:5px;padding:0 4px}
+  .qm.sel .tx2{outline:1px solid #4fb8e0;background:#1a2b38}
+  #chat{position:relative}
+  .qmore2{position:absolute;right:12px;bottom:78px;background:#15202a;border:1px solid #24343f;
+    color:#9fe0ff;font-size:11.5px;padding:6px 12px;border-radius:14px;display:none}
+  .qmore2.on{display:block}
+  .fzp{display:flex;flex-wrap:wrap;gap:6px;padding:9px 12px;border-top:1px solid #17222c;background:#0d141a}
+  .fzp button{background:#131c24;border:1px solid #1e2b36;color:#c8d6e2;border-radius:9px;
+    padding:5px 9px;font:13px inherit}
+  .fzp.hide{display:none}
+  body.th-light{background:#f2f4f6}
+  body.th-light .view,body.th-light #rows{background:#f2f4f6}
+  body.th-light .lbar,body.th-light header{background:#fbfcfd;border-color:#e2e6ea}
+  body.th-light .lbar .lt,body.th-light header .t,body.th-light .it .n{color:#1d2a33}
+  body.th-light .it,body.th-light .it:active{background:#fbfcfd}
+  body.th-light .it{border-color:#eceff2}
+  body.th-light .q input,body.th-light .tabs button{background:#eef1f4;border-color:#dfe4e8;color:#1d2a33}
+  body.th-light #qmsgs{background:#eceff2}
+  body.th-light .qm .tx2{background:#fff;color:#1d2a33;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  body.th-light .qm.me .tx2{background:#cfe9f7;color:#12303f}
+  body.th-light .qm .nm,body.th-light .tsep,body.th-light .it .s{color:#6b7c88}
+  body.th-light .qfoot,body.th-light footer,body.th-light .qin{background:#fbfcfd}
+  body.th-light textarea{color:#1d2a33}
 </style>
 </head>
 <body>
@@ -1099,6 +1129,623 @@
   })();
 
   setTimeout(ping, 600);
+
+  /* ==================== 增强层 ==================== */
+  /* 状态：置顶 / 免打扰 / 已读 / 最后一条 / 草稿 / 收藏 / 偏好 */
+  var FZKEY = function (s) { return s.kind + ':' + s.id; };
+  function fzGet(k, d) { try { var v = localStorage.getItem('fz_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }
+  function fzSet(k, v) { try { localStorage.setItem('fz_' + k, JSON.stringify(v)); } catch (e) {} }
+  var FZ = {
+    pin: fzGet('pin', {}), mute: fzGet('mute', {}), read: fzGet('read', {}),
+    last: fzGet('last', {}), draft: fzGet('draft', {}), fav: fzGet('fav', []), hide: fzGet('hide', {}),
+    cfg: fzGet('cfg', { fs: 14.5, sound: true, vib: true, theme: 'dark' })
+  };
+  function fzPersist() {
+    fzSet('pin', FZ.pin); fzSet('mute', FZ.mute); fzSet('read', FZ.read);
+    fzSet('last', FZ.last); fzSet('draft', FZ.draft); fzSet('fav', FZ.fav); fzSet('hide', FZ.hide); fzSet('cfg', FZ.cfg);
+  }
+  function applyCfg() {
+    try { document.documentElement.style.setProperty('--fzfs', (FZ.cfg.fs || 14.5) + 'px'); } catch (e) {}
+    if (document.body) document.body.classList.toggle('th-light', FZ.cfg.theme === 'light');
+  }
+  applyCfg();
+
+  var fzAC = null;
+  function beep() {
+    if (!FZ.cfg.sound) return;
+    try {
+      fzAC = fzAC || new (window.AudioContext || window.webkitAudioContext)();
+      var o = fzAC.createOscillator(), g = fzAC.createGain();
+      o.type = 'sine'; o.frequency.value = 680; g.gain.value = 0.05;
+      o.connect(g); g.connect(fzAC.destination);
+      o.start(); o.stop(fzAC.currentTime + 0.08);
+    } catch (e) {}
+  }
+  function buzz() {
+    if (!FZ.cfg.vib) return;
+    try { if (navigator.vibrate) navigator.vibrate(28); } catch (e) {}
+  }
+
+  function fmtDay(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000), n = new Date();
+    var p = function (x) { return x < 10 ? '0' + x : '' + x; };
+    var hm = p(d.getHours()) + ':' + p(d.getMinutes());
+    if (d.toDateString() === n.toDateString()) return hm;
+    if (d.toDateString() === new Date(n.getTime() - 86400000).toDateString()) return '昨天 ' + hm;
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm;
+  }
+
+  function fzLong(el, holdFn, tapFn) {
+    var t = 0, fired = false;
+    el.addEventListener('touchstart', function () {
+      fired = false;
+      t = setTimeout(function () { fired = true; holdFn(); }, 460);
+    }, { passive: true });
+    el.addEventListener('touchmove', function () { clearTimeout(t); }, { passive: true });
+    el.addEventListener('touchend', function () {
+      clearTimeout(t);
+      if (!fired && tapFn) tapFn();
+    }, { passive: true });
+    el.addEventListener('touchcancel', function () { clearTimeout(t); }, { passive: true });
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); holdFn(); });
+  }
+
+  function copyText(t) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = t; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove();
+      toast('复制好了');
+    } catch (e) { toast('复制不了'); }
+  }
+
+  /* ---------- 会话列表 ---------- */
+  renderList = function () {
+    var kw = ($('qin2').value || '').trim().toLowerCase();
+    var rows = sessions.filter(function (s) {
+      if (FZ.hide[FZKEY(s)]) return false;
+      if (filter !== 'all' && s.kind !== filter) return false;
+      if (kw && String(s.name || '').toLowerCase().indexOf(kw) < 0) return false;
+      return true;
+    });
+    rows.sort(function (a, b) {
+      var pa = a.kind === 'ai' ? 2 : (FZ.pin[FZKEY(a)] ? 1 : 0);
+      var pb = b.kind === 'ai' ? 2 : (FZ.pin[FZKEY(b)] ? 1 : 0);
+      if (pa !== pb) return pb - pa;
+      return ((FZ.last[FZKEY(b)] || {}).ts || 0) - ((FZ.last[FZKEY(a)] || {}).ts || 0);
+    });
+    rowsEl.innerHTML = '';
+    if (!rows.length) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = sessions.length ? '没找到' : '还没有会话';
+      rowsEl.appendChild(e);
+      return;
+    }
+    rows.forEach(function (s) {
+      var k = FZKEY(s);
+      var L = FZ.last[k] || {};
+      var unread = L.id && L.id > (FZ.read[k] || 0);
+      var it = document.createElement('div');
+      it.className = 'it';
+      it.appendChild(avatarEl(s, 'av'));
+      var tx = document.createElement('div'); tx.className = 'tx';
+      var n = document.createElement('div'); n.className = 'n'; n.textContent = s.name;
+      if (FZ.pin[k]) {
+        var pn = document.createElement('span');
+        pn.textContent = ' ·置顶'; pn.style.cssText = 'font-size:10px;color:#4fb8e0';
+        n.appendChild(pn);
+      }
+      var sub = document.createElement('div'); sub.className = 's';
+      sub.textContent = FZ.draft[k] ? ('[草稿] ' + FZ.draft[k]) : (L.text || s.sub || '');
+      tx.appendChild(n); tx.appendChild(sub);
+      it.appendChild(tx);
+      if (unread && !FZ.mute[k]) {
+        var dt = document.createElement('div'); dt.className = 'dot'; it.appendChild(dt);
+      }
+      if (FZ.mute[k]) {
+        var mr = document.createElement('span'); mr.className = 'mr'; mr.textContent = '免';
+        it.appendChild(mr);
+      }
+      var tm = document.createElement('span'); tm.className = 'tm';
+      tm.textContent = L.ts ? fmtTime(L.ts) : '';
+      it.appendChild(tm);
+      fzLong(it, function () { sessionMenu(s); }, function () { open(s); });
+      rowsEl.appendChild(it);
+    });
+  };
+
+  function sessionMenu(s) {
+    var k = FZKEY(s);
+    var rows = [
+      { t: FZ.pin[k] ? '取消置顶' : '置顶', fn: function () {
+          if (FZ.pin[k]) delete FZ.pin[k]; else FZ.pin[k] = 1;
+          fzPersist(); renderList();
+        } },
+      { t: FZ.mute[k] ? '取消免打扰' : '消息免打扰', fn: function () {
+          if (FZ.mute[k]) delete FZ.mute[k]; else FZ.mute[k] = 1;
+          fzPersist(); renderList();
+        } },
+      { t: '标记已读', fn: function () {
+          FZ.read[k] = (FZ.last[k] || {}).id || 0; fzPersist(); renderList();
+        } },
+      { t: '标为未读', fn: function () {
+          FZ.read[k] = 0; fzPersist(); renderList();
+        } }
+    ];
+    if (FZ.draft[k]) rows.push({ t: '清掉草稿', fn: function () { delete FZ.draft[k]; fzPersist(); renderList(); } });
+    if (s.kind !== 'ai') {
+      rows.push({ t: '从列表移除', cls: 'bad', fn: function () {
+        FZ.hide[k] = 1; fzPersist();
+        sessions = sessions.filter(function (x) { return FZKEY(x) !== k; });
+        renderList();
+      } });
+    }
+    sheet(s.name, rows);
+  }
+
+  /* ---------- 打开会话 ---------- */
+  open = function (s) {
+    if (s.kind === 'ai') { show('app'); return; }
+    cur = s; replyTo = null; qlist = []; fzSelMode = false; fzSel = {}; fzSearch = '';
+    $('qcname').textContent = s.name;
+    $('qcsub').textContent = s.kind === 'group' ? ((s.count || 0) + ' 人 · 群聊') : '好友';
+    rp.classList.add('hide');
+    var k = FZKEY(s);
+    qin.value = FZ.draft[k] || '';
+    autoH();
+    qmsgs.innerHTML = '<div class="empty">加载中</div>';
+    show('chat');
+    loadHistory(true);
+  };
+
+  /* ---------- 拉历史 ---------- */
+  loadHistory = function (first) {
+    if (!cur) return;
+    var k = FZKEY(cur);
+    api('/api/history?kind=' + cur.kind + '&id=' + cur.id + '&count=40')
+      .then(function (r) {
+        var list = (r && r.data) || [];
+        var have = {}, added = 0, i;
+        for (i = 0; i < qlist.length; i++) have[qlist[i].id] = 1;
+        for (i = 0; i < list.length; i++) {
+          if (!have[list[i].id]) { qlist.push(list[i]); added++; }
+        }
+        qlist.sort(function (a, b) { return (a.ts - b.ts) || ((a.id || 0) - (b.id || 0)); });
+        if (qlist.length) {
+          var lm = qlist[qlist.length - 1];
+          FZ.last[k] = { text: plainText(lm).slice(0, 40), ts: lm.ts, id: lm.id };
+          FZ.read[k] = lm.id;
+          fzPersist();
+        }
+        if (first || added) {
+          if (added && !first) { beep(); buzz(); }
+          renderMsgs();
+        }
+        if (!qlist.length) qmsgs.innerHTML = '<div class="empty">还没有聊天记录</div>';
+      })
+      .catch(function (e) {
+        if (first) qmsgs.innerHTML = '<div class="empty">' + (e.message || '拉取失败') + '</div>';
+      });
+  };
+
+  /* ---------- 渲染消息 ---------- */
+  var fzSelMode = false, fzSel = {}, fzSearch = '';
+
+  msgEl = function (m) {
+    var mine = myUid && m.uid === myUid;
+    var wrap = document.createElement('div');
+    wrap.className = 'qm' + (mine ? ' me' : '') + (fzSel[m.id] ? ' sel' : '');
+    wrap.appendChild(avatarEl({ kind: 'private', avatar: 'https://q1.qlogo.cn/g?b=qq&nk=' + m.uid + '&s=100' }, 'av2'));
+    var col = document.createElement('div'); col.className = 'bg2';
+    if (!mine && cur && cur.kind === 'group') {
+      var nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = m.who;
+      col.appendChild(nm);
+    }
+    var bub = document.createElement('div'); bub.className = 'tx2';
+    bub.appendChild(segsToNode(m.segs));
+    col.appendChild(bub);
+    wrap.appendChild(col);
+    longpress(wrap, function () { if (!fzSelMode) msgMenu(m, mine); });
+    wrap.addEventListener('click', function () {
+      if (!fzSelMode) return;
+      if (fzSel[m.id]) delete fzSel[m.id]; else fzSel[m.id] = m;
+      renderMsgs(); refreshSelBar();
+    });
+    return wrap;
+  };
+
+  renderMsgs = function () {
+    qmsgs.innerHTML = '';
+    var lastTs = 0, shown = 0;
+    qlist.forEach(function (m) {
+      if (fzSearch) {
+        var pt = plainText(m);
+        if (pt.toLowerCase().indexOf(fzSearch.toLowerCase()) < 0) return;
+      }
+      if (!lastTs || (m.ts - lastTs) > 300) {
+        var d = document.createElement('div'); d.className = 'tsep';
+        d.textContent = fmtDay(m.ts);
+        qmsgs.appendChild(d);
+      }
+      lastTs = m.ts;
+      qmsgs.appendChild(msgEl(m));
+      shown++;
+    });
+    if (!shown) {
+      var e = document.createElement('div'); e.className = 'empty';
+      e.textContent = fzSearch ? '没搜到' : '还没有聊天记录';
+      qmsgs.appendChild(e);
+    }
+    qmsgs.scrollTop = qmsgs.scrollHeight;
+  };
+
+  /* ---------- 长按菜单 ---------- */
+  msgMenu = function (m, mine) {
+    var t = plainText(m);
+    var rows = [
+      { t: '回复', fn: function () {
+          replyTo = m.id;
+          rpt.textContent = (m.who || '') + '：' + t.slice(0, 24);
+          rp.classList.remove('hide');
+          qin.focus();
+        } },
+      { t: '复制', fn: function () { copyText(t); } },
+      { t: '转发', fn: function () { fzForward([m]); } },
+      { t: '收藏', fn: function () { fzFavAdd([m]); } },
+      { t: '多选', fn: function () {
+          fzSelMode = true; fzSel = {}; fzSel[m.id] = m;
+          renderMsgs(); refreshSelBar();
+        } },
+      { t: '删除本地', cls: 'bad', fn: function () {
+          qlist = qlist.filter(function (x) { return x.id !== m.id; });
+          renderMsgs();
+        } }
+    ];
+    if (mine) rows.unshift({ t: '撤回', cls: 'bad', fn: function () { recall(m); } });
+    sheet(((m.who || '') + '  ·  ' + fmtTime(m.ts)), rows);
+  };
+
+  /* ---------- 转发 ---------- */
+  function fzText(list) {
+    if (list.length > 1) {
+      return '[合并转发 ' + list.length + ' 条]\n' + list.map(function (m) {
+        return (m.who || '') + '：' + plainText(m);
+      }).join('\n');
+    }
+    return list[0] ? plainText(list[0]) : '';
+  }
+  function fzForward(list) {
+    var txt = fzText(list).slice(0, 800);
+    var rows = sessions.map(function (s) {
+      return { t: s.name, fn: function () {
+          if (s.kind === 'ai') {
+            show('app');
+            var ai = document.getElementById('inp'), sb = document.getElementById('send');
+            if (ai) {
+              ai.value = txt;
+              ai.style.height = 'auto';
+              ai.style.height = Math.min(ai.scrollHeight, 120) + 'px';
+              if (sb) sb.disabled = !txt;
+              try { ai.focus(); } catch (e) {}
+            }
+            toast('放进输入框了');
+            return;
+          }
+          api('/api/send', { body: JSON.stringify({ kind: s.kind, id: s.id, text: txt }) })
+            .then(function (r) {
+              if (!r || !r.ok) throw new Error((r && r.error) || '转发失败');
+              toast('转过去了');
+            })
+            .catch(function (e) { toast(e.message); });
+        } };
+    });
+    sheet('转发到', rows);
+  }
+
+  /* ---------- 收藏 ---------- */
+  function fzFavAdd(list) {
+    list.forEach(function (m) {
+      FZ.fav.unshift({ t: plainText(m), who: m.who || '', ts: m.ts });
+    });
+    if (FZ.fav.length > 200) FZ.fav = FZ.fav.slice(0, 200);
+    fzPersist();
+    toast('收了');
+  }
+  function fzShowFav() {
+    if (!FZ.fav.length) { sheet('收藏', [{ t: '空的', cls: 'quiet', fn: function () {} }]); return; }
+    var rows = FZ.fav.slice(0, 30).map(function (f) {
+      return { t: (f.who ? f.who + '：' : '') + String(f.t || '').slice(0, 28), fn: function () {
+          copyText(f.t); } };
+    });
+    rows.push({ t: '清空收藏', cls: 'bad', fn: function () { FZ.fav = []; fzPersist(); toast('清空了'); } });
+    sheet('收藏（点一下复制）', rows);
+  }
+
+  /* ---------- 多选条 ---------- */
+  var selBar = document.createElement('div');
+  selBar.style.cssText = 'display:none;position:fixed;left:0;right:0;bottom:0;z-index:40;'
+    + 'background:#13202a;border-top:1px solid #24343f;padding:11px 14px;gap:18px;'
+    + 'align-items:center;color:#9fb3c2;font-size:13px';
+  document.body.appendChild(selBar);
+  function mkSelBtn(t, fn, cls) {
+    var b = document.createElement('button');
+    b.textContent = t;
+    b.style.cssText = 'background:none;border:none;color:' + (cls === 'bad' ? '#e8878a' : '#9fe0ff')
+      + ';font:13px inherit;padding:4px 2px';
+    b.addEventListener('click', fn);
+    return b;
+  }
+  function refreshSelBar() {
+    selBar.innerHTML = '';
+    if (!fzSelMode) {
+      selBar.style.display = 'none';
+      var f1 = document.querySelector('#chat .qfoot');
+      if (f1) f1.style.display = '';
+      return;
+    }
+    var n = Object.keys(fzSel).length;
+    var lab = document.createElement('span');
+    lab.textContent = '已选 ' + n + ' 条';
+    lab.style.flex = '1';
+    selBar.appendChild(lab);
+    selBar.appendChild(mkSelBtn('转发', function () {
+      var arr = Object.keys(fzSel).map(function (k) { return fzSel[k]; });
+      if (!arr.length) { toast('没选'); return; }
+      fzForward(arr);
+    }));
+    selBar.appendChild(mkSelBtn('收藏', function () {
+      var arr = Object.keys(fzSel).map(function (k) { return fzSel[k]; });
+      if (!arr.length) { toast('没选'); return; }
+      fzFavAdd(arr);
+    }));
+    selBar.appendChild(mkSelBtn('删本地', function () {
+      var ids = {};
+      Object.keys(fzSel).forEach(function (k) { ids[k] = 1; });
+      qlist = qlist.filter(function (x) { return !ids[x.id]; });
+      fzSelMode = false; fzSel = {};
+      renderMsgs(); refreshSelBar();
+    }, 'bad'));
+    selBar.appendChild(mkSelBtn('取消', function () {
+      fzSelMode = false; fzSel = {};
+      renderMsgs(); refreshSelBar();
+    }));
+    selBar.style.display = 'flex';
+    var f2 = document.querySelector('#chat .qfoot');
+    if (f2) f2.style.display = 'none';
+  }
+
+  /* ---------- 表情 / 快捷 ---------- */
+  var FACES = ['（・∀・）', '(๑•̀ㅂ•́)و', '(´；ω；`)', '(￣▽￣)', '( •̀ ω •́ )✧', '(´▽`)',
+    '(￣_￣)', '(｡･ω･｡)', '(๑>؂<๑)', '(╯°□°)╯', '(*/ω＼*)', '_(:3」∠)_',
+    '（笑）', '（摆尾）', '（点头）', '……', '哈哈哈', '好', '不行', '等一下'];
+  var fzp = document.createElement('div');
+  fzp.className = 'fzp hide';
+  FACES.forEach(function (f) {
+    var b = document.createElement('button');
+    b.textContent = f;
+    b.addEventListener('click', function () { insertAt(f); });
+    fzp.appendChild(b);
+  });
+  function insertAt(t) {
+    var el = qin;
+    var a = el.selectionStart || 0, b = el.selectionEnd || 0;
+    el.value = el.value.slice(0, a) + t + el.value.slice(b);
+    el.selectionStart = el.selectionEnd = a + t.length;
+    autoH();
+    qsend.disabled = !el.value.trim();
+    el.focus();
+  }
+
+  /* ---------- 会话页更多菜单 ---------- */
+  function chatMore() {
+    var rows = [];
+    if (cur && cur.kind === 'group') rows.push({ t: '群成员', fn: showMembers });
+    if (cur && cur.kind === 'group') rows.push({ t: '群公告', fn: fzNotice });
+    if (cur && cur.kind === 'group') rows.push({ t: '@ 某人', fn: fzAtWho });
+    rows.push({ t: '搜本会话消息', fn: fzSearchOn });
+    rows.push({ t: '表情面板', fn: function () { fzp.classList.toggle('hide'); } });
+    rows.push({ t: '收藏夹', fn: fzShowFav });
+    rows.push({ t: '刷新', fn: function () { loadHistory(true); } });
+    sheet(cur ? cur.name : '', rows);
+  }
+
+  function fzSearchOn() {
+    if (!cur) return;
+    var box = document.createElement('div');
+    box.style.cssText = 'padding:8px 12px;background:#0f1820;border-bottom:1px solid #1b2833';
+    var inp2 = document.createElement('input');
+    inp2.placeholder = '搜本会话消息，清空就退出';
+    inp2.style.cssText = 'width:100%;background:#131c24;border:1px solid #1e2b36;border-radius:10px;'
+      + 'color:#e6edf3;padding:8px 11px;font:13px inherit;outline:none';
+    box.appendChild(inp2);
+    var oldBox = document.getElementById('fzSearchBox');
+    if (oldBox) oldBox.remove();
+    box.id = 'fzSearchBox';
+    qmsgs.parentNode.insertBefore(box, qmsgs);
+    inp2.addEventListener('input', function () { fzSearch = inp2.value.trim(); renderMsgs(); });
+    inp2.addEventListener('blur', function () {
+      if (!inp2.value.trim()) { fzSearch = ''; renderMsgs(); box.remove(); }
+    });
+    inp2.focus();
+  }
+
+  function fzAtWho() {
+    if (!cur || cur.kind !== 'group') { toast('只有群里有 @'); return; }
+    sht.innerHTML = '<b>@ 谁</b>';
+    shc.innerHTML = '<div class="opt quiet">加载中</div>';
+    sheetEl.classList.add('show');
+    api('/api/members?gid=' + cur.id, { timeout: 30000 })
+      .then(function (r) {
+        var list = (r.data || []);
+        shc.innerHTML = '';
+        if (!list.length) { shc.innerHTML = '<div class="opt quiet">拿不到成员</div>'; return; }
+        list.forEach(function (u) {
+          var d = document.createElement('div');
+          d.className = 'opt';
+          d.textContent = u.name;
+          d.addEventListener('click', function () {
+            closeSheet();
+            insertAt('@' + u.name + ' ');
+          });
+          shc.appendChild(d);
+        });
+      })
+      .catch(function (e) { shc.innerHTML = '<div class="opt quiet">' + e.message + '</div>'; });
+  }
+
+  function fzNotice() {
+    if (!cur || cur.kind !== 'group') return;
+    sheet('群公告', [{ t: '读取中…', cls: 'quiet', fn: function () {} }]);
+    api('/api/notice?gid=' + cur.id)
+      .then(function (r) {
+        var list = (r && r.data) || [];
+        var rows = list.map(function (n) {
+          return { t: String(n.text || '').slice(0, 60) || '(空)', fn: function () { copyText(n.text || ''); } };
+        });
+        sheet('群公告（点复制）', rows.length ? rows : [{ t: '没有公告', cls: 'quiet', fn: function () {} }]);
+      })
+      .catch(function (e) {
+        sheet('群公告', [{ t: e.message || '读不到', cls: 'bad', fn: function () {} }]);
+      });
+  }
+
+  /* ---------- 草稿 ---------- */
+  var fzDraftT = 0;
+  qin.addEventListener('input', function () {
+    if (!cur) return;
+    var k = FZKEY(cur);
+    clearTimeout(fzDraftT);
+    fzDraftT = setTimeout(function () {
+      var v = qin.value.trim();
+      if (v) FZ.draft[k] = v.slice(0, 60); else delete FZ.draft[k];
+      fzPersist();
+    }, 600);
+  });
+
+  /* ---------- 底部表情按钮 ---------- */
+  var foot = document.querySelector('#chat .qfoot');
+  if (foot) {
+    var fb = document.createElement('button');
+    fb.textContent = '颜';
+    fb.style.cssText = 'background:none;border:none;color:#7d8b99;font:13px inherit;padding:0 6px';
+    fb.addEventListener('click', function () { fzp.classList.toggle('hide'); });
+    foot.insertBefore(fb, foot.firstChild);
+    foot.parentNode.insertBefore(fzp, foot);
+  }
+
+  /* ---------- 跳最新 ---------- */
+  var jumpBtn = document.createElement('div');
+  jumpBtn.className = 'qmore2';
+  jumpBtn.textContent = '回到最新';
+  chatV.appendChild(jumpBtn);
+  qmsgs.addEventListener('scroll', function () {
+    var far = qmsgs.scrollHeight - qmsgs.scrollTop - qmsgs.clientHeight > 220;
+    jumpBtn.classList.toggle('on', far);
+  });
+  jumpBtn.addEventListener('click', function () { qmsgs.scrollTop = qmsgs.scrollHeight; });
+
+  /* ---------- 设置面板 ---------- */
+  (function fzSettings() {
+    var pan = document.getElementById('panel');
+    if (!pan) return;
+    var box = document.createElement('div');
+    box.className = 'f';
+    box.innerHTML =
+      '<label>界面</label>'
+      + '<label class="chk"><input type="checkbox" id="fzLight"> 浅色主题</label>'
+      + '<label class="chk"><input type="checkbox" id="fzSound"> 新消息提示音</label>'
+      + '<label class="chk"><input type="checkbox" id="fzVib"> 新消息震动</label>'
+      + '<div class="h">字号 <span id="fzFsV"></span></div>'
+      + '<input type="range" id="fzFs" min="12" max="19" step="0.5" style="width:100%">'
+      + '<div class="h">收藏 ' + FZ.fav.length + ' 条，点下面看</div>';
+    var btns = pan.querySelector('.btns');
+    pan.insertBefore(box, btns || null);
+
+    var lv = document.getElementById('fzLight');
+    var sv = document.getElementById('fzSound');
+    var vv = document.getElementById('fzVib');
+    var fs = document.getElementById('fzFs');
+    var fsv = document.getElementById('fzFsV');
+    lv.checked = FZ.cfg.theme === 'light';
+    sv.checked = !!FZ.cfg.sound;
+    vv.checked = !!FZ.cfg.vib;
+    fs.value = FZ.cfg.fs || 14.5;
+    fsv.textContent = (FZ.cfg.fs || 14.5) + 'px';
+    lv.addEventListener('change', function () { FZ.cfg.theme = lv.checked ? 'light' : 'dark'; applyCfg(); fzPersist(); });
+    sv.addEventListener('change', function () { FZ.cfg.sound = sv.checked; fzPersist(); });
+    vv.addEventListener('change', function () { FZ.cfg.vib = vv.checked; fzPersist(); });
+    fs.addEventListener('input', function () {
+      FZ.cfg.fs = parseFloat(fs.value);
+      fsv.textContent = FZ.cfg.fs + 'px';
+      applyCfg(); fzPersist();
+    });
+  })();
+
+  /* ---------- 列表页右上角入口 ---------- */
+  (function fzListMore() {
+    var bar = document.querySelector('.lbar');
+    if (!bar) return;
+    var b = document.createElement('button');
+    b.textContent = '⋯';
+    b.addEventListener('click', function () {
+      sheet('更多', [
+        { t: '收藏夹（' + FZ.fav.length + '）', fn: fzShowFav },
+        { t: '刚收到的消息', fn: fzRecent },
+        { t: '恢复隐藏的会话', fn: function () { FZ.hide = {}; fzPersist(); loadSessions(); toast('都放出来了'); } },
+        { t: '刷新好友和群', fn: function () { loadSessions(); toast('刷了'); } }
+      ]);
+    });
+    bar.appendChild(b);
+  })();
+
+  function fzRecent() {
+    api('/api/recent')
+      .then(function (r) {
+        var list = (r && r.data) || [];
+        var rows = list.slice(0, 20).map(function (x) {
+          return { t: x.name + '：' + String(x.text || '').slice(0, 20), fn: function () {
+              var s = { kind: x.kind, id: x.id, name: x.name, avatar: x.avatar };
+              open(s);
+            } };
+        });
+        sheet('最近会话', rows.length ? rows : [{ t: '没有', cls: 'quiet', fn: function () {} }]);
+      })
+      .catch(function (e) { toast(e.message || '读不到'); });
+  }
+
+
+  /* ---------- 最近会话同步（未读 / 列表预览） ---------- */
+  function fzSyncRecent() {
+    if (!hasNative) return;
+    api('/api/recent')
+      .then(function (r) {
+        var list = (r && r.data) || [];
+        var hit = false;
+        list.forEach(function (x) {
+          var k = x.kind + ':' + x.id;
+          var old = FZ.last[k] || {};
+          if (!old.ts || x.ts > old.ts) {
+            FZ.last[k] = { text: String(x.text || '').slice(0, 40), ts: x.ts, id: x.id };
+            if (!FZ.mute[k] && old.ts && x.ts > old.ts) { beep(); buzz(); }
+            hit = true;
+          }
+        });
+        if (hit) { fzPersist(); renderList(); }
+      })
+      .catch(function () {});
+  }
+
+  startListPoll = function () {
+    clearTimeout(listT);
+    listT = setTimeout(function tick() {
+      if (listV.classList.contains('hide')) return;
+      fzSyncRecent();
+      listT = setTimeout(tick, 15000);
+    }, 15000);
+  };
+
 })();
 </script>
 <script>
@@ -1144,7 +1791,7 @@
   var sheetEl = $('sheet'), shb = $('shb'), sht = $('sht'), shc = $('shc');
   var rp = $('rp'), rpt = $('rpt');
 
-  var sessions = [], cur = null, msgs = [], filter = 'all', replyTo = null, myUid = 0;
+  var sessions = [], cur = null, qlist = [], filter = 'all', replyTo = null, myUid = 0;
   var pollT = 0, listT = 0;
 
   function show(which) {
@@ -1235,7 +1882,7 @@
 
   function open(s) {
     if (s.kind === 'ai') { show('app'); return; }
-    cur = s; replyTo = null; msgs = [];
+    cur = s; replyTo = null; qlist = [];
     $('qcname').textContent = s.name;
     $('qcsub').textContent = s.kind === 'group' ? ((s.count || 0) + ' 人 · 群聊') : '好友';
     rp.classList.add('hide');
@@ -1251,13 +1898,13 @@
       .then(function (r) {
         var list = (r && r.data) || [];
         var have = {}, added = 0, i;
-        for (i = 0; i < msgs.length; i++) have[msgs[i].id] = 1;
+        for (i = 0; i < qlist.length; i++) have[qlist[i].id] = 1;
         for (i = 0; i < list.length; i++) {
-          if (!have[list[i].id]) { msgs.push(list[i]); added++; }
+          if (!have[list[i].id]) { qlist.push(list[i]); added++; }
         }
-        msgs.sort(function (a, b) { return (a.ts - b.ts) || ((a.id || 0) - (b.id || 0)); });
+        qlist.sort(function (a, b) { return (a.ts - b.ts) || ((a.id || 0) - (b.id || 0)); });
         if (first || added) renderMsgs();
-        if (!msgs.length) qmsgs.innerHTML = '<div class="empty">还没有聊天记录</div>';
+        if (!qlist.length) qmsgs.innerHTML = '<div class="empty">还没有聊天记录</div>';
       })
       .catch(function (e) {
         if (first) qmsgs.innerHTML = '<div class="empty">' + (e.message || '拉取失败') + '</div>';
@@ -1294,7 +1941,7 @@
 
   function renderMsgs() {
     qmsgs.innerHTML = '';
-    msgs.forEach(function (m) { qmsgs.appendChild(msgEl(m)); });
+    qlist.forEach(function (m) { qmsgs.appendChild(msgEl(m)); });
     qmsgs.scrollTop = qmsgs.scrollHeight;
   }
 
@@ -1365,7 +2012,7 @@
     api('/api/recall', { body: JSON.stringify({ msg_id: m.id }) })
       .then(function (r) {
         if (!r.ok) throw new Error(r.error || '撤不回');
-        msgs = msgs.filter(function (x) { return x.id !== m.id; });
+        qlist = qlist.filter(function (x) { return x.id !== m.id; });
         renderMsgs(); toast('撤了');
       })
       .catch(function (e) { sheet('撤不回', [{ t: e.message, cls: 'bad', fn: function () {} }]); });
@@ -1529,10 +2176,10 @@
     renderList();
   });
   $('qback').addEventListener('click', function () {
-    cur = null; msgs = []; replyTo = null;
+    cur = null; qlist = []; replyTo = null;
     show('list');
   });
-  $('qmore').addEventListener('click', showMembers);
+  $('qmore').addEventListener('click', chatMore);
   $('rpx').addEventListener('click', function () {
     replyTo = null; rp.classList.add('hide');
   });
@@ -1557,7 +2204,7 @@
   window.__back = function () {
     if (!hasNative) return false;
     if (!chatV.classList.contains('hide')) {
-      cur = null; msgs = []; replyTo = null; rp.classList.add('hide');
+      cur = null; qlist = []; replyTo = null; rp.classList.add('hide');
       show('list');
       return true;
     }
