@@ -308,7 +308,23 @@
     stat.textContent = txt;
   }
 
+  /* 页面里的报错一律转给原生写进 fish_app.log，不然崩了查不到 */
+  window.__fwdNative = function (s) {
+    try {
+      if (window.AndroidApp && window.AndroidApp.jsLog) window.AndroidApp.jsLog(String(s).slice(0, 2000));
+    } catch (e) {}
+  };
+  window.onerror = function (m, src, line, col) {
+    window.__fwdNative('JSERR ' + m + ' @' + String(src || '').slice(-60) + ':' + line + ':' + col);
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function (ev) {
+    var r = ev.reason;
+    window.__fwdNative('JSPROM ' + ((r && (r.stack || r.message)) || r));
+  });
+
   function log(s) {
+    if (s.indexOf('!!') === 0 || s.indexOf('JSERR') === 0) { try { window.__fwdNative(s); } catch (e) {} }
     logs.push(s);
     if (logs.length > 140) logs.shift();
     logBox.textContent = logs.join('\n');
