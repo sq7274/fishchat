@@ -1177,7 +1177,7 @@
   }
 
   function fzLong(el, holdFn, tapFn) {
-    var t = 0, fired = false;
+    var t = 0, fired = false, touched = 0;
     el.addEventListener('touchstart', function () {
       fired = false;
       t = setTimeout(function () { fired = true; holdFn(); }, 460);
@@ -1185,10 +1185,16 @@
     el.addEventListener('touchmove', function () { clearTimeout(t); }, { passive: true });
     el.addEventListener('touchend', function () {
       clearTimeout(t);
+      touched = Date.now();
       if (!fired && tapFn) tapFn();
     }, { passive: true });
     el.addEventListener('touchcancel', function () { clearTimeout(t); }, { passive: true });
     el.addEventListener('contextmenu', function (e) { e.preventDefault(); holdFn(); });
+    el.addEventListener('click', function () {
+      if (Date.now() - touched < 700) return;
+      if (fired) { fired = false; return; }
+      if (tapFn) tapFn();
+    });
   }
 
   function copyText(t) {
@@ -1295,6 +1301,9 @@
     var k = FZKEY(s);
     qin.value = FZ.draft[k] || '';
     autoH();
+    refreshSelBar();
+    var qf = document.querySelector('#chat .qfoot');
+    if (qf) qf.style.display = '';
     qmsgs.innerHTML = '<div class="empty">加载中</div>';
     show('chat');
     loadHistory(true);
@@ -1364,7 +1373,7 @@
         var pt = plainText(m);
         if (pt.toLowerCase().indexOf(fzSearch.toLowerCase()) < 0) return;
       }
-      if (!lastTs || (m.ts - lastTs) > 300) {
+      if (m.ts && (!lastTs || (m.ts - lastTs) > 300)) {
         var d = document.createElement('div'); d.className = 'tsep';
         d.textContent = fmtDay(m.ts);
         qmsgs.appendChild(d);
