@@ -1755,6 +1755,55 @@
     }, 15000);
   };
 
+
+  /* ---------- 聊天页发图 ---------- */
+  var fzFile = document.createElement('input');
+  fzFile.type = 'file';
+  fzFile.accept = 'image/*';
+  fzFile.style.display = 'none';
+  document.body.appendChild(fzFile);
+
+  function fzSendImg(file) {
+    if (!cur || cur.kind === 'ai') { toast('这儿只发文字'); return; }
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { toast('图太大了（限 3M）'); return; }
+    var fr = new FileReader();
+    fr.onload = function () {
+      var b64 = String(fr.result || '').split(',')[1] || '';
+      if (!b64) { toast('读不出图'); return; }
+      toast('发图中');
+      api('/api/send', {
+        timeout: 60000,
+        body: JSON.stringify({ kind: cur.kind, id: cur.id, image: b64 })
+      })
+        .then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || '发不出去');
+          toast('发了');
+          setTimeout(function () { loadHistory(false); }, 900);
+        })
+        .catch(function (e) { toast(e.message || '失败'); });
+    };
+    fr.readAsDataURL(file);
+  }
+
+  fzFile.addEventListener('change', function () {
+    fzSendImg(fzFile.files && fzFile.files[0]);
+    fzFile.value = '';
+  });
+
+  (function fzImgBtn() {
+    var f2 = document.querySelector('#chat .qfoot');
+    if (!f2) return;
+    var b = document.createElement('button');
+    b.textContent = '图';
+    b.style.cssText = 'background:none;border:none;color:#7d8b99;font:13px inherit;padding:0 6px';
+    b.addEventListener('click', function () {
+      if (!cur || cur.kind === 'ai') { toast('这儿只发文字'); return; }
+      fzFile.click();
+    });
+    f2.insertBefore(b, f2.firstChild);
+  })();
+
 })();
 </script>
 <script>
