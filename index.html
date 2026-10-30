@@ -204,12 +204,24 @@
   body.th-light .qm .nm,body.th-light .tsep,body.th-light .it .s{color:#6b7c88}
   body.th-light .qfoot,body.th-light footer,body.th-light .qin{background:#fbfcfd}
   body.th-light textarea{color:#1d2a33}
+  /* 底部两个页面：鱼 / QQ */
+  #app,#list{height:calc(100% - 54px)}
+  #tabbar{position:fixed;left:0;right:0;bottom:0;height:54px;display:flex;
+    background:#0e161c;border-top:1px solid #17222c;z-index:30}
+  #tabbar.hide{display:none}
+  #tabbar button{flex:1;background:none;border:none;color:#5e707e;font-size:12.5px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+  #tabbar button .ti{font-size:15px;line-height:1}
+  #tabbar button.on{color:#9fe0ff}
+  body.th-light #tabbar{background:#fbfcfd;border-color:#e2e6ea}
+  body.th-light #tabbar button{color:#8b98a3}
+  body.th-light #tabbar button.on{color:#2b7fa8}
 </style>
 </head>
 <body>
 <div id="list" class="view">
   <div class="lbar">
-    <span class="lt">大肥鱼</span>
+    <span class="lt">QQ</span>
     <span class="ls" id="qst">连接中</span>
     <span class="sp"></span>
     <button id="qref">刷新</button>
@@ -219,9 +231,13 @@
     <button class="on" data-k="all">全部</button>
     <button data-k="private">好友</button>
     <button data-k="group">群</button>
-    <button data-k="ai">对话</button>
   </div>
   <div id="rows"></div>
+</div>
+
+<div id="tabbar">
+  <button class="on" data-k="app" id="tabFish"><span class="ti">鱼</span>跟我聊</button>
+  <button data-k="list" id="tabQQ"><span class="ti">Q</span>QQ</button>
 </div>
 
 <div id="chat" class="view hide">
@@ -1856,9 +1872,17 @@
     listV.classList.toggle('hide', which !== 'list');
     chatV.classList.toggle('hide', which !== 'chat');
     appV.classList.toggle('hide', which !== 'app');
+    var tb = document.getElementById('tabbar');
+    if (tb) tb.classList.toggle('hide', which === 'chat' || !hasNative);
+    if (which === 'app' || which === 'list') setTab(which);
     clearTimeout(pollT); clearTimeout(listT);
     if (which === 'chat') startPoll();
     if (which === 'list') startListPoll();
+  }
+
+  function setTab(k) {
+    var bs = document.getElementById('tabbar').querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].getAttribute('data-k') === k);
   }
 
   function avatarEl(s, cls) {
@@ -1874,15 +1898,16 @@
     var d = document.createElement('div');
     d.className = cls;
     d.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:13px;color:#5d7a8c;background:#131c24;flex:0 0 auto';
-    d.textContent = s.kind === 'ai' ? '鱼' : (s.kind === 'group' ? '群' : '友');
+    d.textContent = s.kind === 'ai' ? '鱼' : (s.kind === 'sys' ? '!' : (s.kind === 'group' ? '群' : '友'));
     return d;
   }
 
   // ---------- 列表 ----------
+  var qqDown = false, qqRetryT = 0, qqQuiet = false;
+
   function loadSessions(silent) {
-    // 「和我说话」永远排在最前，QQ 断线也不影响聊天
-    var ai = { kind: 'ai', id: 'ai', name: '大肥鱼', sub: '和我说话', avatar: '' };
-    sessions = [ai];
+    // 跟我聊是独立页面，这里只装 QQ 的会话；QQ 断了那边也照聊
+    sessions = [];
     renderList();
     if (!hasNative) { qst.textContent = '仅 App 可用'; return; }
     qst.textContent = '加载中';
@@ -1890,20 +1915,50 @@
       .then(function (r) {
         var fs = (r[0] && r[0].data) || [], gs = (r[1] && r[1].data) || [];
         myUid = ((r[2] && r[2].data) || {}).uid || myUid;
-        sessions = [ai]
-          .concat(fs.map(function (x) { x.sub = (x.nick && x.nick !== x.name) ? x.nick : '好友'; return x; }))
+        sessions = fs.map(function (x) { x.sub = (x.nick && x.nick !== x.name) ? x.nick : '好友'; return x; })
           .concat(gs.map(function (x) { x.sub = (x.count || 0) + ' 人'; return x; }));
         qst.textContent = fs.length + ' 好友 · ' + gs.length + ' 群';
+        var was = qqDown;
+        qqDown = false; stopQQRetry();
         renderList();
+        if (was && qqQuiet) toast('QQ 自己连上了');
       })
-      .catch(function () {
-        qst.textContent = 'QQ 未连接';
+      .catch(function (e) {
+        // 断线不当报错轰炸：列表里标一行，怎么处理交给你自己选
+        qqDown = true;
+        qst.textContent = qqQuiet ? '先不管 QQ' : '没连上';
+        renderList();
+        if (!silent && !qqQuiet) askQQ(e);
       });
   }
 
+  function askQQ(err) {
+    sheet('QQ 没连上', [
+      { t: '再试一次', fn: function () { loadSessions(); } },
+      { t: '先不管 QQ（照样能跟我聊）', fn: function () { qqQuiet = true; qqDown = true; qst.textContent = '先不管 QQ'; renderList(); toast('那就不折腾了'); } },
+      { t: '去改连接设置', fn: function () { var b = document.getElementById('btnSet'); if (b) b.click(); } },
+      { t: '让我每 30 秒自己试一次', fn: function () { startQQRetry(); toast('我盯着，好了说一声'); } },
+      { t: '看看到底啥错', cls: 'quiet', fn: function () { sheet('报错原文', [{ t: String((err && err.message) || '拿不到'), cls: 'quiet' }]); } }
+    ]);
+  }
+
+  function startQQRetry() {
+    if (qqRetryT || !hasNative) return;
+    qqRetryT = setInterval(function () {
+      Promise.all([api('/api/friends'), api('/api/groups')])
+        .then(function () { stopQQRetry(); loadSessions(true); if (qqQuiet) toast('QQ 自己连上了'); })
+        .catch(function () {});
+    }, 30000);
+  }
+  function stopQQRetry() { if (qqRetryT) { clearInterval(qqRetryT); qqRetryT = 0; } }
+
   function renderList() {
     var kw = ($('qin2').value || '').trim().toLowerCase();
-    var rows = sessions.filter(function (s) {
+    var all = sessions.slice();
+    // 断线只在列表里插一行提示，不弹报错
+    if (qqDown) all.unshift({ kind: 'sys', id: '__qq', name: 'QQ 没连上', sub: '点这儿选：重试 / 先不管 / 改设置' });
+    var rows = all.filter(function (s) {
+      if (s.kind === 'sys') return !kw;
       if (filter !== 'all' && s.kind !== filter) return false;
       if (kw && String(s.name || '').toLowerCase().indexOf(kw) < 0) return false;
       return true;
@@ -1924,6 +1979,7 @@
       tx.className = 'tx';
       var n = document.createElement('div');
       n.className = 'n'; n.textContent = s.name;
+      if (s.kind === 'sys') n.style.color = '#c9737a';
       var sub = document.createElement('div');
       sub.className = 's'; sub.textContent = s.sub || '';
       tx.appendChild(n); tx.appendChild(sub);
@@ -1940,6 +1996,7 @@
 
   function open(s) {
     if (s.kind === 'ai') { show('app'); return; }
+    if (s.kind === 'sys') { askQQ(); return; }
     cur = s; replyTo = null; qlist = [];
     $('qcname').textContent = s.name;
     $('qcsub').textContent = s.kind === 'group' ? ((s.count || 0) + ' 人 · 群聊') : '好友';
@@ -2266,23 +2323,28 @@
       show('list');
       return true;
     }
-    if (!appV.classList.contains('hide')) { show('list'); return true; }
+    if (!appV.classList.contains('hide')) { return false; }
     return false;
   };
 
   // 没原生桥（网页端）就保持原来的单聊界面
-  if (hasNative) {
-    var hd = appV.querySelector('header');
-    if (hd) {
-      var back = document.createElement('button');
-      back.textContent = '‹';
-      back.style.cssText = 'font-size:19px;padding:0 8px 0 0;color:#7d8b99;background:none;border:none';
-      back.addEventListener('click', function () { show('list'); });
-      hd.insertBefore(back, hd.firstChild);
-    }
+  var qqAsked = false;
+  document.getElementById('tabFish').addEventListener('click', function () {
+    if (cur) { cur = null; qlist = []; replyTo = null; }
+    show('app');
+  });
+  document.getElementById('tabQQ').addEventListener('click', function () {
     show('list');
-    loadSessions();
+    // 第一次点 QQ 页才问一次，之后只标一行，不烦你
+    loadSessions(qqAsked || qqQuiet);
+    qqAsked = true;
+  });
+
+  if (hasNative) {
+    show('app');
+    loadSessions(true);
   } else {
+    document.getElementById('tabbar').classList.add('hide');
     show('app');
   }
 })();
