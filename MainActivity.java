@@ -378,6 +378,11 @@ public class MainActivity extends Activity {
         js(sb.toString());
     }
 
+    private void emitUploaded(String id, int code, String body) {
+        js("window.__uploaded&&window.__uploaded(" + id + "," + code + ","
+                + JSONObject.quote(body == null ? "" : body) + ")");
+    }
+
     @Override
     public void onBackPressed() {
         if (web != null && web.canGoBack()) {
@@ -523,6 +528,84 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void pickImage(final String id, final String url, final String key) {
             runOnUiThread(() -> startPickImage(id, url, key));
+        }
+
+        /**
+         * 网页压缩后的 base64 直接上传（不经过系统选图），
+         * 结果回调 window.__uploaded(id, code, body)。
+         */
+        @JavascriptInterface
+        public void upload(final String id, final String url, final String key,
+                           final String b64, final String name) {
+            new Thread(() -> {
+                HttpURLConnection c = null;
+                try {
+                    byte[] raw = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                    String fname = (name == null || name.isEmpty())
+                            ? ("img" + System.currentTimeMillis() + ".jpg") : name;
+                    String low = fname.toLowerCase();
+                    String type = low.endsWith(".png") ? "image/png"
+                            : low.endsWith(".webp") ? "image/webp"
+                            : low.endsWith(".gif") ? "image/gif" : "image/jpeg";
+                    String boundary = "----fish" + System.currentTimeMillis();
+                    byte[] hb = ("--" + boundary + "\r\n"
+                            + "Content-Disposition: form-data; name=\"file\"; filename=\"" + fname + "\"\r\n"
+                            + "Content-Type: " + type + "\r\n\r\n").getBytes("UTF-8");
+                    byte[] tb = ("\r\n--" + boundary + "--\r\n").getBytes("UTF-8");
+
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(120000);
+                    c.setRequestProperty("Authorization", "Bearer " + key);
+                    c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+                    c.setDoOutput(true);
+                    c.setFixedLengthStreamingMode(hb.length + raw.length + tb.length);
+                    try (OutputStream os = c.getOutputStream()) {
+                        os.write(hb);
+                        os.write(raw);
+                        os.write(tb);
+                    }
+                    int code = c.getResponseCode();
+                    String body = readAll(code >= 400 ? c.getErrorStream() : c.getInputStream());
+                    writeLog("IMG", "上传 " + raw.length + "B -> " + code);
+                    emitUploaded(id, code, body);
+                } catch (Exception e) {
+                    writeLog("IMG", "上传异常 " + e);
+                    emitUploaded(id, 0, e.toString());
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }).start();
+        }
+
+        /** 普通 POST（JSON 体），回 window.__done(id, code, body) */
+        @JavascriptInterface
+        public void post(final String id, final String url, final String key, final String body) {
+            new Thread(() -> {
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setConnectTimeout(12000);
+                    c.setReadTimeout(40000);
+                    c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    if (key != null && !key.isEmpty()) {
+                        c.setRequestProperty("Authorization", "Bearer " + key);
+                    }
+                    c.setDoOutput(true);
+                    try (OutputStream os = c.getOutputStream()) {
+                        os.write((body == null ? "" : body).getBytes("UTF-8"));
+                    }
+                    int code = c.getResponseCode();
+                    InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                    emitDone(id, code, readAll(in));
+                } catch (Exception e) {
+                    emitDone(id, 0, e.toString());
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }).start();
         }
 
         /** 普通 GET，用于自检。 */
