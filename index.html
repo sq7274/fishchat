@@ -236,8 +236,8 @@
 </div>
 
 <div id="tabbar">
-  <button class="on" data-k="app" id="tabFish"><span class="ti">鱼</span>跟我聊</button>
-  <button data-k="list" id="tabQQ"><span class="ti">Q</span>QQ</button>
+  <button class="on" data-k="app" id="tabFish" onclick="return window.__tab&&window.__tab('app')"><span class="ti">鱼</span>跟我聊</button>
+  <button data-k="list" id="tabQQ" onclick="return window.__tab&&window.__tab('list')"><span class="ti">Q</span>QQ</button>
 </div>
 
 <div id="chat" class="view hide">
@@ -1847,6 +1847,41 @@
 })();
 </script>
 <script>
+/* ================== 兜底层：报错可视 + 标签页硬绑定 ================== */
+(function () {
+  function box(msg) {
+    try {
+      var d = document.getElementById('errbox');
+      if (!d) {
+        d = document.createElement('div');
+        d.id = 'errbox';
+        d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99;background:#3a1d22;color:#ffb9c4;font:12px/1.45 monospace;padding:8px 10px;white-space:pre-wrap;word-break:break-all';
+        (document.body || document.documentElement).appendChild(d);
+      }
+      d.textContent = d.textContent ? d.textContent + '\n' + msg : msg;
+    } catch (e) {}
+    try { AndroidApp.jsLog('JSERR', msg); } catch (e) {}
+  }
+  window.__err = box;
+  window.onerror = function (m, src, ln, col, err) {
+    box('JS: ' + m + ' @' + (src || '').split('/').pop() + ':' + ln);
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason; box('PROMISE: ' + (r && (r.message || r) || r));
+  });
+  window.__tab = function (k) {
+    if (window.__goTab) { try { window.__goTab(k); return false; } catch (e) { box('GOTAB: ' + e.message); } }
+    try {
+      var app = document.getElementById('app'), list = document.getElementById('list'), chat = document.getElementById('chat'), tb = document.getElementById('tabbar');
+      if (app) app.classList.toggle('hide', k !== 'app');
+      if (list) list.classList.toggle('hide', k !== 'list');
+      if (chat) chat.classList.add('hide');
+      if (tb) { var bs = tb.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].getAttribute('data-k') === k); }
+    } catch (e) { box('TAB: ' + e.message); }
+    return false;
+  };
+})();
 /* ================== 外层：会话列表 + QQ 群聊/私聊 ================== */
 (function () {
   var QQ = { base: 'http://127.0.0.1:6187', token: 'fishqq_9Ks3pR' };
@@ -2358,6 +2393,7 @@
     loadSessions(qqAsked || qqQuiet);
     qqAsked = true;
   }
+  window.__goTab = goTab;
   document.addEventListener('click', function (e) {
     var t = e.target, n = 0;
     while (t && t !== document && n < 6) {
@@ -2380,12 +2416,16 @@
     qqAsked = true;
   });
 
-  if (hasNative) {
-    show('app');
-    loadSessions(true);
-  } else {
-    document.getElementById('tabbar').classList.add('hide');
-    show('app');
+  try {
+    if (hasNative) {
+      show('app');
+      loadSessions(true);
+    } else {
+      document.getElementById('tabbar').classList.add('hide');
+      show('app');
+    }
+  } catch (e) {
+    if (window.__err) window.__err('INIT: ' + (e && e.message));
   }
 })();
 </script>
