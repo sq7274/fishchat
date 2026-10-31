@@ -207,7 +207,7 @@
   /* 底部两个页面：鱼 / QQ */
   #app,#list{height:calc(100% - 54px)}
   #tabbar{position:fixed;left:0;right:0;bottom:0;height:54px;display:flex;
-    background:#0e161c;border-top:1px solid #17222c;z-index:30}
+    background:#0e161c;border-top:1px solid #17222c;z-index:9999;pointer-events:auto}
   #tabbar.hide{display:none}
   #tabbar button{flex:1;background:none;border:none;color:#5e707e;font-size:12.5px;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
@@ -1881,6 +1881,18 @@
     } catch (e) { box('TAB: ' + e.message); }
     return false;
   };
+  /* 底部区域硬接管：不管有没有东西盖住，点屏幕最下面一条都切页 */
+  document.addEventListener('click', function (e) {
+    try {
+      var h = window.innerHeight || document.documentElement.clientHeight;
+      var w = window.innerWidth || 360;
+      if (!h || e.clientY < h - 72) return;
+      var t = e.target, inBar = false, n = 0;
+      while (t && t !== document && n < 8) { if (t.id === 'tabbar') { inBar = true; break; } t = t.parentNode; n++; }
+      if (!inBar) box('TAPHIT: ' + (e.target.id || e.target.className || e.target.tagName) + ' y=' + Math.round(e.clientY) + '/' + Math.round(h));
+      window.__tab(e.clientX < w / 2 ? 'app' : 'list');
+    } catch (er) {}
+  }, true);
 })();
 /* ================== 外层：会话列表 + QQ 群聊/私聊 ================== */
 (function () {
@@ -2430,4 +2442,5 @@
 })();
 </script>
 </body>
+<div id="vb" style="position:fixed;right:6px;bottom:60px;font:10px monospace;color:#3f505d;z-index:99999;pointer-events:none">v18</div>
 </html>
