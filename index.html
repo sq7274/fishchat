@@ -10,6 +10,8 @@
     font:15px/1.6 -apple-system,system-ui,"PingFang SC","Noto Sans SC",sans-serif;
     overscroll-behavior:none}
   #app{display:flex;flex-direction:column;height:100%}
+  /* 关键：id 选择器的 display 比 .hide 权重大，不写 !important 这三个页面永远关不掉 */
+  #app.hide,#list.hide,#chat.hide{display:none!important}
 
   header{flex:0 0 auto;display:flex;align-items:center;gap:9px;
     padding:calc(env(safe-area-inset-top) + 11px) 15px 11px;
