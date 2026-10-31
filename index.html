@@ -1846,6 +1846,7 @@
     f2.insertBefore(b, f2.firstChild);
   })();
 
+window.__chatMore = chatMore;
 })();
 </script>
 <script>
@@ -2367,7 +2368,10 @@
     cur = null; qlist = []; replyTo = null;
     show('list');
   });
-  $('qmore').addEventListener('click', chatMore);
+  var _qm = document.getElementById('qmore');
+  if (_qm) _qm.addEventListener('click', function () {
+    try { if (window.__chatMore) window.__chatMore(); } catch (e) { document.title = document.title; }
+  });
   $('rpx').addEventListener('click', function () {
     replyTo = null; rp.classList.add('hide');
   });
