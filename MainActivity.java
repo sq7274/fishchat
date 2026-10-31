@@ -179,8 +179,16 @@ public class MainActivity extends Activity {
             "https://raw.githubusercontent.com/sq7274/fishchat/main/index.html"
     };
     private static final String CACHE_FILE = "remote_index.html";
+    /* APK 自带的页面版本，改了这个值就会作废旧缓存 */
+    private static final String ASSET_TAG = "v18b";
 
     private void loadLocal() {
+        String tag = getSharedPreferences("fish", 0).getString("assetTag", "");
+        if (!ASSET_TAG.equals(tag)) {
+            new java.io.File(getFilesDir(), CACHE_FILE).delete();
+            getSharedPreferences("fish", 0).edit().putString("assetTag", ASSET_TAG).apply();
+            writeLog("WEB", "版本标签变 " + ASSET_TAG + "，清掉旧页面缓存");
+        }
         String cached = readCache();
         if (cached != null) {
             writeLog("WEB", "先用缓存的页面，长度 " + cached.length());
