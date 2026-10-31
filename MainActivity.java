@@ -171,6 +171,8 @@ public class MainActivity extends Activity {
 
     /* 远程页面：改 index.html 推到仓库就生效，不用重编 APK */
     private static final String[] REMOTE_INDEX = {
+            "http://127.0.0.1:6186/app/index.html",
+            "http://127.0.0.1:6188/index.html",
             "https://ghproxy.net/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
             "https://gh-proxy.com/https://raw.githubusercontent.com/sq7274/fishchat/main/index.html",
             "https://cdn.jsdelivr.net/gh/sq7274/fishchat@main/index.html",
@@ -660,3 +662,4 @@ public class MainActivity extends Activity {
         }
     }
 }
+
